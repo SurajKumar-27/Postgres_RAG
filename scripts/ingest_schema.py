@@ -9,7 +9,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
 TABLE_EXCLUDE_LIST = {"schema_embeddings", "alembic_version"}
 # DELAY_SECONDS = 5  # Small delay between embedding calls to avoid 429
-EMBEDDING_MODEL = "models/embedding-001"
+EMBEDDING_MODEL = "models/embedding-004"
 # ---------------------
 
 if not GEMINI_API_KEY:
