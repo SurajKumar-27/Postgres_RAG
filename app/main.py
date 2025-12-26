@@ -1,64 +1,81 @@
-# app/main.py
 import logging
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
+from sqlalchemy.orm import Session
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.models import ChatRequest, ChatResponse  # see suggested models below
+from app.models import ChatRequest, ChatResponse
 from app.core import get_chat_response
+from app.database import SessionLocal
+# Import our new helpers
+from app.history_manager import get_or_create_session, add_message, get_chat_history
 
-# --- logging ---
+# --- Logging ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- FastAPI app ---
-app = FastAPI(
-    title="Postgres RAG Agent (Agent + Backend Tools)",
-    description="Chat API that can query Postgres or call backend endpoints as an agent.",
-    version="1.1.0"
-)
+app = FastAPI(title="Postgres RAG Agent")
 
-# Optional: allow CORS if you use a web frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten this in production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-@app.get("/")
-def read_root():
-    return {"status": "Postgres RAG Agent is running", "version": "1.1.0"}
+# Dependency to get DB session
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 @app.post("/chat", response_model=ChatResponse)
-def chat_with_db(request: ChatRequest):
-    """
-    Receives a natural language query and returns:
-    - answer: final natural language answer
-    - generated_sql: the SQL the system executed (if mode == 'sql')
-    - backend_raw: raw backend response (if mode == 'backend')
-    - mode: 'sql' or 'backend'
-    """
+def chat_with_db(request: ChatRequest, db: Session = Depends(get_db)):
     logger.info("Received query: %s", request.query)
+    
     try:
-        res = get_chat_response(request.query)
-        logger.info("Mode: %s; generated_sql: %s", res.get("mode"), (res.get("generated_sql") or "")[:200])
+        # 1. Manage Session (Get existing or create new)
+        session_id = get_or_create_session(db, request.session_id)
+        
+        # 2. Retrieve History from DB
+        # Only fetch the last 6 messages to keep tokens low, but enough for context
+        db_history = get_chat_history(db, session_id, limit=6)
+        for msg in db_history:
+            print({
+                "id": msg.id,
+                "role": msg.role,
+                "message": msg.content,
+                "created_at": msg.created_at
+            })
 
-        # Normalize backend_raw so it's JSON-serializable in response model
-        backend_raw = res.get("backend_raw")
-        try:
-            # ensure it's JSON-serializable; if not, stringify
-            import json
-            json.dumps(backend_raw)
-        except Exception:
-            backend_raw = {"_raw": str(backend_raw)}
+        
+        # 3. Save the *Current* User Query to DB
+        add_message(db, session_id, "user", request.query)
+
+        # 4. Run Core Logic (Pass history objects to core)
+        # Note: core.py expects objects with .role and .content attributes, 
+        # which our SQLAlchemy models already have.
+        res = get_chat_response(request.query, history=db_history)
+
+        # Construct a rich log for the history
+        assistant_content = res.get("answer")
+        if res.get("generated_sql"):
+            assistant_content += f"\n\nContext SQL:\n{res.get('generated_sql')}"
+
+        # Save this combined version to DB
+        add_message(db, session_id, "assistant", assistant_content)
 
         return ChatResponse(
             answer=res.get("answer"),
+            session_id=session_id,  # Return ID so frontend knows context
+            suggested_questions=res.get("suggested_questions", []),
             generated_sql=res.get("generated_sql"),
-            backend_raw=backend_raw,
+            backend_raw=res.get("backend_raw"),
             mode=res.get("mode")
         )
+
     except Exception as e:
-        logger.exception("Error while processing chat request")
+        logger.exception("Error processing request")
         raise HTTPException(status_code=500, detail=str(e))

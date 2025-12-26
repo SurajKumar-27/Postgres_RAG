@@ -3,9 +3,10 @@ import os
 import re
 import json
 import logging
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
+from langchain.output_parsers import CommaSeparatedListOutputParser
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_community.utilities.sql_database import SQLDatabase
 from langchain.schema.runnable import RunnablePassthrough
@@ -38,18 +39,22 @@ llm = ChatGoogleGenerativeAI(model="models/gemini-2.5-flash", temperature=0, api
 answer_llm = ChatGoogleGenerativeAI(model="models/gemini-2.5-flash", temperature=0, api_key=GOOGLE_API_KEY)
 
 # Embedding model (schema retrieval)
-embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", api_key=GOOGLE_API_KEY)
+embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001", api_key=GOOGLE_API_KEY)
 
 # ---------- 2) Database setup ----------
 db = SQLDatabase(db_engine)
 VectorSession = sessionmaker(bind=db_engine)
 
+# rag/app/core.py
+
+# ... (keep existing imports)
+
 # ---------- 3) Schema retriever ----------
 def get_schema_retriever(query: str, k: int = 40) -> str:
     """
-    Retrieve the most relevant table/column schema snippets for the query by
-    comparing embeddings stored in the schema_embeddings table.
-    Returns a textual schema summary (or empty string if none found).
+    Retrieves relevant schema DDL AND explicit business rules.
+    It automatically scans retrieved rules to ensure referenced tables (like linked Foreign Keys)
+    are also included in the schema context.
     """
     session = VectorSession()
     try:
@@ -59,18 +64,128 @@ def get_schema_retriever(query: str, k: int = 40) -> str:
         scored = []
         for s in schemas:
             emb = np.array(s.embedding)
+            # Cosine similarity
             sim = dot(emb, query_embedding) / (norm(emb) * norm(query_embedding) + 1e-8)
             scored.append((sim, s))
 
+        # Get top K most relevant chunks
         top_k = sorted(scored, key=lambda x: x[0], reverse=True)[:k]
-        table_names = {s.table_name for _, s in top_k}
-
-        if not table_names:
+        
+        if not top_k:
             return ""
 
-        return db.get_table_info(table_names=list(table_names))
+        # --- 🆕 DEPENDENCY SCANNING LOGIC ---
+        
+        # 1. Start with the primary tables owning the retrieved chunks
+        relevant_tables = {s.table_name for _, s in top_k}
+        
+        # 2. Get list of ALL real tables in the DB to check against
+        # (Since you have ~70 tables, this check is very fast)
+        all_db_tables = set(db.get_table_names())
+
+        # 3. Scan the retrieved text (Descriptions/Rules) for mentions of other tables
+        for _, s in top_k:
+            description_text = s.description.lower()
+            
+            # If a known DB table name appears in the rule text, include that table too!
+            # Example: Rule says "Join to ezc_users", so we detect "ezc_users" and load it.
+            for candidate_table in all_db_tables:
+                if candidate_table in relevant_tables:
+                    continue # Already included
+                
+                # Check if table name exists in the text (simple substring check)
+                if candidate_table in description_text:
+                    relevant_tables.add(candidate_table)
+
+        # 4. Fetch DDL for ALL identified tables (Primary + Referenced)
+        ddl_text = db.get_table_info(table_names=list(relevant_tables))
+        
+
+        # --- END NEW LOGIC ---
+
+        # 5. Extract Relevant Rules/Descriptions to show to LLM
+        relevant_rules = []
+        seen_rules = set()
+        
+        for _, s in top_k:
+            desc = s.description
+            # Avoid duplicating the raw table DDL summary if it's just "Table: x"
+            if desc and desc not in seen_rules:
+                if "RULE" in desc or "RELATIONSHIP" in desc or "Business Rule" in desc:
+                    relevant_rules.append(f"- {desc}")
+                    seen_rules.add(desc)
+
+        # Combine DDL and Rules
+        final_context = (
+            f"### Relevant Table Schemas (DDL):\n{ddl_text}\n\n"
+            f"### Relevant Relationships & Rules:\n" + "\n".join(relevant_rules)
+        )
+        
+        return final_context
     finally:
         session.close()
+
+
+suggestion_prompt = PromptTemplate(
+    template="""
+You are a helpful data assistant.
+User Question: {input}
+Current Answer: {answer}
+
+Based on this interaction, suggest 3 short, relevant follow-up questions the user might want to ask next to dig deeper into the data.
+Return ONLY the questions, separated by commas. Do not number them.
+
+Example: "Show breakdown by year, Who is the top customer, List the details"
+""",
+    input_variables=["input", "answer"]
+)
+
+def generate_suggestions(query: str, answer: str) -> List[str]:
+    """Generates 3 follow-up questions based on context."""
+    try:
+        # Using the answer_llm (fast model) for this
+        response = answer_llm.invoke(suggestion_prompt.format(input=query, answer=answer)).content
+        # Simple parsing to get a list
+        questions = [q.strip() for q in response.split(",") if q.strip()]
+        return questions[:3] # Ensure we only return max 3
+    except Exception:
+        return []
+    
+
+contextualize_prompt = PromptTemplate(
+    template="""
+Given a chat history and the latest user question which might reference context in the chat history, 
+formulate a standalone question which can be understood without the chat history. 
+Do NOT answer the question, just reformulate it if needed and otherwise return it as is.
+
+Chat History:
+{chat_history}
+
+User Question: {input}
+
+Standalone Question:
+""",
+    input_variables=["chat_history", "input"]
+)
+
+def contextualize_query(query: str, history: List[Any]) -> str:
+    """Rewrites the query to be standalone based on history."""
+    if not history:
+        return query
+    
+    # Format history into a string: "User: hi\nAssistant: hello"
+    history_str = "\n".join([f"{msg.role.title()}: {msg.content}" for msg in history])
+    
+    try:
+        # Use the fast LLM (answer_llm) for this text manipulation
+        new_query = answer_llm.invoke(
+            contextualize_prompt.format(chat_history=history_str, input=query)
+        ).content
+        logger.info(f"Contextualized Query: '{query}' -> '{new_query}'")
+        return new_query
+    except Exception as e:
+        logger.error(f"Contextualization failed: {e}")
+        return query
 
 # ---------- 4) SQL generation chain ----------
 sql_prompt = PromptTemplate(
@@ -262,7 +377,11 @@ If the backend returned an error or non-success status, explain what likely fail
 )
 
 # ---------- 10) Agent decision + orchestration ----------
-def run_agent_with_backend(query: str) -> Dict[str, Any]:
+def run_agent_with_backend(query: str, history: List[Any] = []) -> Dict[str, Any]:
+    
+    # 🆕 STEP 1: Contextualize the query
+    # If the user says "and by region?", we convert it to "Show sales by region"
+    effective_query = contextualize_query(query, history)
     """
     High-level orchestration:
     1) Ask LLM whether to call backend (return JSON tool call) or to use SQL (no JSON)
@@ -271,7 +390,7 @@ def run_agent_with_backend(query: str) -> Dict[str, Any]:
     Returns a dict with fields: answer, generated_sql (or None), backend_raw (or None), mode ("backend"|"sql")
     """
     # Build decision prompt to the LLM
-    schema_text = get_schema_retriever(query)
+    schema_text = get_schema_retriever(effective_query)
     decision_instructions = (
         "Decide whether the user's request requires calling a backend REST API (for actions like create order, update, submit payment, etc.) "
         "or it is purely a data retrieval that should be answered by running SQL against the database. "
@@ -284,7 +403,7 @@ def run_agent_with_backend(query: str) -> Dict[str, Any]:
 Schema context (trimmed):
 {schema_text}
 
-User question: {query}
+User question: {effective_query}
 
 {decision_instructions}
 
@@ -333,10 +452,10 @@ If returning a tool JSON, ensure it's valid JSON (no trailing text).
     # --- Fallback path: SQL pipeline ---
     logger.info("LLM did not request backend call; falling back to SQL pipeline.")
     # Generate SQL
-    generated_sql = sql_generation_chain.invoke({"input": query})
+    generated_sql = sql_generation_chain.invoke({"input": effective_query})
     # Run SQL (with retry/fix)
     try:
-        sql_result = run_sql_query_with_retry(generated_sql, query)
+        sql_result = run_sql_query_with_retry(generated_sql, effective_query)
     except Exception as e:
         logger.error("Final SQL execution failed: %s", e, exc_info=True)
         # Let the LLM explain the SQL failure
@@ -371,22 +490,23 @@ Answer:
         input_variables=["input", "query", "result"]
     )
 
-    final_answer = answer_llm.invoke(answer_prompt.format(**answer_input)).content
+    # final_answer = answer_llm.invoke(answer_prompt.format(**answer_input)).content
+    final_response = answer_llm.invoke(answer_prompt.format(**answer_input))
+    final_answer = final_response.content
+    suggestions = generate_suggestions(query, final_answer)
+
+    if final_response.usage_metadata:
+        # Returns dict like: {'input_tokens': 150, 'output_tokens': 45, 'total_tokens': 195}
+        logger.info(f"Final Answer Usage: {final_response.usage_metadata}")
 
     return {
         "answer": final_answer,
+        "suggested_questions": suggestions, # 🆕 Add this
         "generated_sql": generated_sql,
         "backend_raw": None,
         "mode": "sql"
     }
 
 # ---------- 11) Public entrypoint ----------
-def get_chat_response(query: str) -> Dict[str, Any]:
-    """
-    Main entrypoint for external code. Returns dict with:
-    - answer (str): final NL answer
-    - generated_sql (str|None)
-    - backend_raw (dict|None)
-    - mode ("sql" or "backend")
-    """
-    return run_agent_with_backend(query)
+def get_chat_response(query: str, history: List[Any] = []) -> Dict[str, Any]:
+    return run_agent_with_backend(query, history)

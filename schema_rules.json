@@ -1,0 +1,290 @@
+{
+  "doc_details": [
+    "Business Rule: Stores detailed document attributes, likely for web orders.",
+    "Business Rule: 'sold_to_code' and 'ship_to_code' link to 'ezc_customer.ec_no' or 'ezc_customer_addr.eca_no'.",
+    "Business Rule: 'create_userid' links to 'ezc_users.eu_id' to identify the creator.",
+    "Business Rule: 'prod_code' links to 'ezc_products.ezp_product_code'."
+  ],
+  "ezc_access_request_dtls": [
+    "Business Rule: Manages user access requests. 'eard_user_name' or 'eard_email_address' can be used to link to 'ezc_users' or contact info.",
+    "Business Rule: 'eard_sold_to' links to 'ezc_customer.ec_no' to associate the request with a specific customer account."
+  ],
+  "ezc_address": [
+    "Business Rule: General address master table. 'ea_address_code' is the primary identifier used to link addresses to other entities like equipment or partners."
+  ],
+  "ezc_adverse_event_info": [
+    "Business Rule: Records adverse events, possibly healthcare-related. 'eaei_linked_sr_id' may link to a service request or order ID.",
+    "Business Rule: 'eaei_created_by' links to 'ezc_users.eu_id'."
+  ],
+  "ezc_agreement_header": [
+    "Business Rule: Header table for business agreements or contracts. 'eah_template_code' links to agreement templates."
+  ],
+  "ezc_analytical_report_header": [
+    "Business Rule: Definitions for analytical reports. 'earh_report_id' is the unique identifier."
+  ],
+  "ezc_assets": [
+    "Business Rule: Stores binary assets (images, documents). 'eza_asset_id' is the unique key.",
+    "Business Rule: Linked to categories via 'ezc_category_assets' or products via 'ezc_product_assets'."
+  ],
+  "ezc_attributes": [
+    "Business Rule: Defines dynamic attributes for system objects. 'ea_attrib_id' is the identifier.",
+    "Business Rule: 'ea_container' and 'ea_ezc_struct_field' define where this attribute is mapped in the application structure."
+  ],
+  "ezc_audit_log": [
+    "Business Rule: System-wide audit trail. 'els_table_name' and 'els_key' identify the modified record.",
+    "Business Rule: 'els_changed_by' links to 'ezc_users.eu_id'."
+  ],
+  "ezc_auth_desc": [
+    "Business Rule: Master table for authorization descriptions. 'euad_auth_key' is the unique authorization key used in 'ezc_user_auth' or 'ezc_role_auth'."
+  ],
+  "ezc_blocked_users": [
+    "Business Rule: Tracks blocked users. 'ebu_user_id' links to 'ezc_users.eu_id'."
+  ],
+  "ezc_bp_level_workflow": [
+    "Business Rule: Defines workflow steps specific to a business partner. 'ebp_business_partner' links to 'ezc_customer.ec_business_partner' or 'ezc_customer.ec_no'."
+  ],
+  "ezc_brand_sites": [
+    "Business Rule: Multi-site/brand configuration. 'ebs_site_id' is the unique site identifier."
+  ],
+  "ezc_buss_partner_areas": [
+    "Business Rule: Maps users to specific business partners and sales areas. 'ebpa_user_id' links to 'ezc_users.eu_id'.",
+    "Business Rule: 'ebpa_buss_partner' links to 'ezc_customer.ec_no' or 'ezc_customer.ec_business_partner'."
+  ],
+  "ezc_buss_partner_auth": [
+    "Business Rule: Authorizations assigned specifically to a business partner. 'ebpa_buss_partner' links to 'ezc_customer.ec_no'."
+  ],
+  "ezc_buss_partner_config": [
+    "Business Rule: Configuration settings for business partners. 'ebpc_buss_partner' links to 'ezc_customer.ec_no'."
+  ],
+  "ezc_calendar": [
+    "Business Rule: Defines working calendars. 'ecal_calendar_code' is the key."
+  ],
+  "ezc_card_transactions": [
+    "Business Rule: Logs credit card transactions. 'ect_user_id' links to 'ezc_users.eu_id'.",
+    "Business Rule: 'ect_po_no' links to the purchase order number involved in the transaction."
+  ],
+  "ezc_catalog_categories": [
+    "Business Rule: Maps categories to catalogs. 'ecc_catalog_id' links to 'ezc_product_catalog.epc_no'. 'ecc_category_id' links to 'ezc_categories.ec_code'."
+  ],
+  "ezc_categories": [
+    "Business Rule: Product category hierarchy. 'ec_code' is the unique category identifier.",
+    "Business Rule: 'ec_parent' contains the 'ec_code' of the parent category, establishing the tree structure."
+  ],
+  "ezc_category_assets": [
+    "Business Rule: Links assets to categories. Join 'eca_category_code' to 'ezc_categories.ec_code' and 'eca_asset_id' to 'ezc_assets.eza_asset_id'."
+  ],
+  "ezc_category_description": [
+    "Business Rule: Multi-language descriptions for categories. Join 'ecd_code' to 'ezc_categories.ec_code'."
+  ],
+  "ezc_category_products": [
+    "Business Rule: Maps products to categories. Join 'ecp_category_code' to 'ezc_categories.ec_code' and 'ecp_product_code' to 'ezc_products.ezp_product_code'."
+  ],
+  "ezc_change_order_header": [
+    "Business Rule: Header for change orders. 'ecoh_doc_id' is the identifier.",
+    "Business Rule: 'ecoh_order_ref' links to the original order (e.g., 'ezc_sales_doc_header.esdh_doc_number')."
+  ],
+  "ezc_change_order_items": [
+    "Business Rule: Line items for change orders. 'ecoi_doc_id' links to 'ezc_change_order_header.ecoh_doc_id'.",
+    "Business Rule: 'ecoi_sku' links to 'ezc_products.ezp_product_code'."
+  ],
+  "ezc_components": [
+    "Business Rule: Component details for equipment. 'ec_component_code' is the identifier.",
+    "Business Rule: 'ec_parent_comp_code' creates a hierarchy of components."
+  ],
+  "ezc_contract": [
+    "Business Rule: Service or Sales Contracts. 'ec_contract_code' is the unique key.",
+    "Business Rule: 'ec_soldto_cust' links to 'ezc_customer.ec_no'.",
+    "Business Rule: 'ec_contract_template' links to a contract template definition."
+  ],
+  "ezc_country_region_mapping": [
+    "Business Rule: Maps countries to regions. Useful for addressing and localization."
+  ],
+  "ezc_currency": [
+    "Business Rule: Master table for currency codes ('ec_curr_key')."
+  ],
+  "ezc_customer": [
+    "Business Rule: Core customer master table. 'ec_no' is the internal customer number.",
+    "Business Rule: 'ec_business_partner' indicates the parent partner entity.",
+    "Business Rule: 'ec_partner_no' often links to the external/ERP customer ID."
+  ],
+  "ezc_customer_addr": [
+    "Business Rule: Customer address details. 'eca_no' links to 'ezc_customer.ec_no'.",
+    "Business Rule: Distinguish addresses by 'eca_partner_listbox_desc' (e.g., Ship-To vs Sold-To)."
+  ],
+  "ezc_defaults_desc": [
+    "Business Rule: Descriptions for default keys used in user/system preferences. 'eudd_key' is the identifier."
+  ],
+  "ezc_dispatchinfo_header": [
+    "Business Rule: Shipping/Dispatch header. 'ezdi_deliveryno' is the unique delivery number.",
+    "Business Rule: 'ezdi_so_num' links to 'ezc_sales_doc_header.esdh_doc_number'."
+  ],
+  "ezc_dispatchinfo_lines": [
+    "Business Rule: Line items for dispatches. 'ezdl_deliveryno' links to 'ezc_dispatchinfo_header.ezdi_deliveryno'.",
+    "Business Rule: 'ezdl_mat_nr' links to 'ezc_products.ezp_product_code'."
+  ],
+  "ezc_documents": [
+    "Business Rule: Stores document metadata/files. 'ezd_documentable_id' provides a polymorphic link to other tables (defined by 'ezd_documentable_type')."
+  ],
+  "ezc_equipment": [
+    "Business Rule: Equipment master records. 'ee_equipment_code' is the primary key.",
+    "Business Rule: 'ee_buss_partner' links to 'ezc_customer.ec_no' (owner).",
+    "Business Rule: 'ee_model_code' links to 'ezc_model.em_model_code'."
+  ],
+  "ezc_forum": [
+    "Business Rule: Forum messages/posts. 'efa_forum_id' identifies the forum.",
+    "Business Rule: 'efa_created_by' links to 'ezc_users.eu_id'."
+  ],
+  "ezc_forum_info": [
+    "Business Rule: Metadata for forums. 'efi_forum_id' is the primary key."
+  ],
+  "ezc_job_control": [
+    "Business Rule: Scheduler job control. 'ejc_job_id' is the identifier.",
+    "Business Rule: 'ejc_user_id' links to the user who scheduled the job."
+  ],
+  "ezc_job_history": [
+    "Business Rule: Execution history of jobs. Links to 'ezc_job_control' via 'ejh_job_id'."
+  ],
+  "ezc_labor_reqmt": [
+    "Business Rule: Labor requirements for service orders. 'ezlr_order_id' links to 'ezc_maintenance_order.emo_order_id'."
+  ],
+  "ezc_maintenance_order": [
+    "Business Rule: Service/Maintenance orders. 'emo_order_id' is the primary key.",
+    "Business Rule: 'emo_instrument_code' links to 'ezc_equipment.ee_equipment_code'.",
+    "Business Rule: 'emo_requestor_id' links to 'ezc_users.eu_id' or a contact person."
+  ],
+  "ezc_material_master": [
+    "Business Rule: Material/Product master data. 'emm_no' is the product code (similar to 'ezc_products.ezp_product_code').",
+    "Business Rule: 'emm_manufacturer' and 'emm_catalog_no' provide classification."
+  ],
+  "ezc_material_reqmt": [
+    "Business Rule: Material requirements for service orders. 'ezmr_order_id' links to 'ezc_maintenance_order.emo_order_id'.",
+    "Business Rule: 'ezmr_item' links to product master tables."
+  ],
+  "ezc_messages": [
+    "Business Rule: Internal messaging system. 'epm_msg_id' is the key.",
+    "Business Rule: 'epm_user_id' is the sender (links to 'ezc_users.eu_id')."
+  ],
+  "ezc_news": [
+    "Business Rule: News items. 'ezn_id' is the identifier.",
+    "Business Rule: 'ezn_soldto' targets specific customers (links to 'ezc_customer.ec_no')."
+  ],
+  "ezc_order_history": [
+    "Business Rule: History of orders. 'eoh_ezc_order_ref' links to 'ezc_sales_doc_header.esdh_doc_number'."
+  ],
+  "ezc_part_smart_brands": [
+    "Business Rule: Brands in the PartSmart system. 'id' is the primary key."
+  ],
+  "ezc_part_smart_models": [
+    "Business Rule: Models in the PartSmart system. 'id' is the primary key.",
+    "Business Rule: Linked to brands via 'ezc_part_smart_brands_parent_models' (indirectly) or mapping tables."
+  ],
+  "ezc_part_smart_parts": [
+    "Business Rule: Parts in the PartSmart system. 'part_number' is a key identifier."
+  ],
+  "ezc_price_lines": [
+    "Business Rule: Pricing conditions. 'epl_product_code' links to products.",
+    "Business Rule: 'epl_customer' links to 'ezc_customer.ec_no' for customer-specific pricing."
+  ],
+  "ezc_product_assets": [
+    "Business Rule: Links assets to products. Join 'epa_product_code' to 'ezc_products.ezp_product_code' and 'epa_asset_id' to 'ezc_assets.eza_asset_id'."
+  ],
+  "ezc_product_attributes": [
+    "Business Rule: EAV store for product attributes. 'epa_product_code' links to products."
+  ],
+  "ezc_product_catalog": [
+    "Business Rule: Catalog definition. 'epc_no' is the catalog ID."
+  ],
+  "ezc_product_descriptions": [
+    "Business Rule: Product descriptions. Join 'epd_product_code' to 'ezc_products.ezp_product_code'.",
+    "Business Rule: 'epd_lang_code' allows for multi-language support."
+  ],
+  "ezc_product_group": [
+    "Business Rule: Product grouping/hierarchy. 'epg_no' is the group identifier."
+  ],
+  "ezc_product_relations": [
+    "Business Rule: Defines relationships between products (e.g., cross-sell, up-sell). 'epr_product_code1' and 'epr_product_code2' link to 'ezc_products.ezp_product_code'."
+  ],
+  "ezc_products": [
+    "Business Rule: Primary product master table. 'ezp_product_code' is the unique SKU.",
+    "Business Rule: 'ezp_brand', 'ezp_family', 'ezp_model' defines hierarchy.",
+    "Business Rule: To get descriptions, join with 'ezc_product_descriptions'."
+  ],
+  "ezc_registration_form_dtls": [
+    "Business Rule: User registration requests. 'erfd_user_id' links to the created user in 'ezc_users' (if approved)."
+  ],
+  "ezc_role_auth": [
+    "Business Rule: Mapping of roles to authorizations. 'era_role_nr' links to 'ezc_user_roles.eur_role_nr'."
+  ],
+  "ezc_roles_by_user": [
+    "Business Rule: Assigns roles to users. 'erbu_user_id' links to 'ezc_users.eu_id', 'erbu_role' links to 'ezc_user_roles.eur_role_nr'."
+  ],
+  "ezc_sales_doc_header": [
+    "Business Rule: Sales Order Header. 'esdh_doc_number' is the primary key.",
+    "Business Rule: 'esdh_created_by' contains a User ID; join to 'ezc_users.eu_id' for name.",
+    "Business Rule: 'esdh_sold_to' and 'esdh_ship_to' link to 'ezc_customer.ec_no' or 'ezc_customer_addr.eca_no'."
+  ],
+  "ezc_sales_doc_items": [
+    "Business Rule: Sales Order Lines. 'esdi_sales_doc' is the FK to 'ezc_sales_doc_header.esdh_doc_number'.",
+    "Business Rule: 'esdi_material' links to 'ezc_products.ezp_product_code'.",
+    "Business Rule: 'esdh_doc_number is of 10 characters we need append with spaces to make it of 10 length'."
+  ],
+  "ezc_sales_doc_partners": [
+    "Business Rule: Partners involved in a sales doc. 'esdp_sales_doc' links to the header.",
+    "Business Rule: 'esdp_partner_number' links to 'ezc_customer.ec_no'."
+  ],
+  "ezc_shopping_cart": [
+    "Business Rule: User shopping cart. 'esc_user_id' links to 'ezc_users.eu_id'.",
+    "Business Rule: 'esc_mat_no' links to 'ezc_products.ezp_product_code'."
+  ],
+  "ezc_site_globals": [
+    "Business Rule: Global configuration settings for the site/system."
+  ],
+  "ezc_so_cancel_header": [
+    "Business Rule: Requests for order cancellation. 'esch_so_num' links to 'ezc_sales_doc_header.esdh_doc_number'."
+  ],
+  "ezc_system_auth": [
+    "Business Rule: System-wide authorizations."
+  ],
+  "ezc_user_auth": [
+    "Business Rule: Direct user-to-authorization mapping. 'eua_user_id' links to 'ezc_users.eu_id'."
+  ],
+  "ezc_user_defaults": [
+    "Business Rule: User preferences/defaults. 'eud_user_id' links to 'ezc_users.eu_id'."
+  ],
+  "ezc_user_groups": [
+    "Business Rule: User groups for security/config. 'eug_id' links to 'ezc_users.eug_id'."
+  ],
+  "ezc_user_product_favorites": [
+    "Business Rule: User favorite products. 'epf_user_id' links to 'ezc_users.eu_id', 'epf_mat_no' links to 'ezc_products.ezp_product_code'."
+  ],
+  "ezc_user_roles": [
+    "Business Rule: Definition of roles. 'eur_role_nr' is the primary key."
+  ],
+  "ezc_users": [
+    "Business Rule: User master table. 'eu_id' is the primary key.",
+    "Business Rule: 'eu_business_partner' links to 'ezc_customer.ec_no' or 'ezc_customer.ec_business_partner'.",
+    "Business Rule: 'eug_id' links to 'ezc_user_groups.eug_id'."
+  ],
+  "ezc_warranty_claims_header": [
+    "Business Rule: Warranty claims. 'ewch_claim_no' or 'ewch_uuid' identifies the claim.",
+    "Business Rule: 'ewch_serial_no' may link to 'ezc_equipment.ee_oem_slno'."
+  ],
+  "ezc_web_stats": [
+    "Business Rule: Web usage statistics. 'ews_user_id' links to 'ezc_users.eu_id'."
+  ],
+  "ezc_wf_actions": [
+    "Business Rule: Workflow action definitions."
+  ],
+  "ezc_wf_audit_trail": [
+    "Business Rule: Audit trail for workflow steps."
+  ],
+  "ezc_wf_doc_history_header": [
+    "Business Rule: Header for workflow document history. 'ewdhh_doc_id' links to the document being processed (e.g., order number)."
+  ],
+  "qrtz_job_details": [
+    "Business Rule: Quartz scheduler job definitions."
+  ],
+  "qrtz_triggers": [
+    "Business Rule: Quartz scheduler triggers."
+  ]
+}

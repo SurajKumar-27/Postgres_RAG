@@ -1,143 +1,108 @@
 import os
+import json
 import time
 import google.generativeai as genai
 from sqlalchemy import create_engine, inspect, text
-from app.database import SessionLocal, SchemaEmbedding, create_vector_tables
+from app.database import SessionLocal, SchemaEmbedding, create_tables
 
 # --- Configuration ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
 TABLE_EXCLUDE_LIST = {"schema_embeddings", "alembic_version"}
-# DELAY_SECONDS = 5  # Small delay between embedding calls to avoid 429
-EMBEDDING_MODEL = "models/embedding-004"
-# ---------------------
+EMBEDDING_MODEL = "models/gemini-embedding-001"
+RULES_FILE = "C:/Users/suraj.marepally\OneDrive - The Hackett Group, Inc/sqlRag/rag/schema_rules.json"  # Path to your rules file
 
 if not GEMINI_API_KEY:
-    raise ValueError("⚠️ GEMINI_API_KEY not set. Get one from https://aistudio.google.com/app/apikey")
+    raise ValueError("⚠️ GEMINI_API_KEY not set.")
 
-# Configure Gemini
 genai.configure(api_key=GEMINI_API_KEY)
-
 engine = create_engine(DATABASE_URL)
 inspector = inspect(engine)
 db = SessionLocal()
 
-# --- Embedding function (Gemini) ---
 def get_gemini_embedding(text: str):
-    """Generate an embedding using Gemini with rate-limit handling."""
+    """Generates embedding with retry logic."""
     while True:
         try:
-            result = genai.embed_content(
-                model=EMBEDDING_MODEL,
-                content=text,
-                task_type="retrieval_document"  # can also be 'retrieval_query'
-            )
-            embedding = result["embedding"]
-            print("✅ Gemini embedding generated successfully.")
-            # time.sleep(DELAY_SECONDS)  # pace requests
-            return embedding
+            return genai.embed_content(
+                model=EMBEDDING_MODEL, content=text, task_type="retrieval_document"
+            )["embedding"]
         except Exception as e:
-            print(f"⚠️ Gemini API error: {e}")
-            # print(f"⏳ Waiting {DELAY_SECONDS} seconds before retry...")
-            # time.sleep(DELAY_SECONDS)
+            print(f"⚠️ API error: {e}. Retrying in 2s...")
+            time.sleep(2)
 
-# --- Fetch table/column comments from PostgreSQL ---
-def get_table_comments():
-    """Fetch COMMENT descriptions for tables and columns."""
-    query = text("""
-        SELECT 
-            c.relname AS table_name,
-            a.attname AS column_name,
-            d.description
-        FROM 
-            pg_class c
-            JOIN pg_attribute a ON a.attrelid = c.oid
-            LEFT JOIN pg_description d ON d.objoid = c.oid AND d.objsubid = a.attnum
-        WHERE 
-            c.relkind = 'r'
-            AND a.attnum > 0
-            AND NOT a.attisdropped
-            AND c.relname NOT LIKE 'pg_%'
-            AND c.relname NOT LIKE 'sql_%'
-        UNION
-        SELECT 
-            c.relname AS table_name,
-            NULL AS column_name,
-            d.description
-        FROM 
-            pg_class c
-            LEFT JOIN pg_description d ON d.objoid = c.oid AND d.objsubid = 0
-        WHERE 
-            c.relkind = 'r'
-            AND c.relname NOT LIKE 'pg_%'
-            AND c.relname NOT LIKE 'sql_%';
-    """)
-    comments = {}
-    with engine.connect() as conn:
-        result = conn.execute(query)
-        for table, column, desc in result:
-            if desc:
-                comments.setdefault(table, {})
-                if column:
-                    comments[table][column] = desc
-                else:
-                    comments[table]["_table_"] = desc
-    return comments
+def load_custom_rules():
+    """Loads specific business rules from JSON file."""
+    if os.path.exists(RULES_FILE):
+        with open(RULES_FILE, "r") as f:
+            return json.load(f)
+    return {}
 
-# --- Ingestion pipeline ---
 def ingest_schema():
-    """Extract schema, generate Gemini embeddings, and store them."""
-    print("🚀 Starting schema ingestion with Gemini embeddings...")
-    create_vector_tables()
-    db.query(SchemaEmbedding).delete()
-
+    print("🚀 Starting schema ingestion...")
+    create_tables()
+    db.query(SchemaEmbedding).delete() # Clear old data
+    
     schema_names = inspector.get_schema_names()
-    comments = get_table_comments()
+    custom_rules = load_custom_rules()
+    print(custom_rules)
     embeddings_to_add = []
 
     for schema in schema_names:
-        if schema.startswith("pg_") or schema == "information_schema":
-            continue
-
+        if schema.startswith("pg_") or schema == "information_schema": continue
+        
         tables = inspector.get_table_names(schema=schema)
         for table_name in tables:
-            if table_name in TABLE_EXCLUDE_LIST:
-                continue
+            if table_name in TABLE_EXCLUDE_LIST: continue
+            
+            print(f"📘 Processing {table_name}...")
 
-            print(f"\n📘 Processing table: {table_name}")
-
-            # --- Table-level embedding ---
-            table_comment = comments.get(table_name, {}).get("_table_", f"Table named {table_name}")
-            table_text = f"Table: {table_name}. Description: {table_comment}"
-            table_embedding = get_gemini_embedding(table_text)
-
+            # 1. Embed Table Description
+            table_text = f"Table: {table_name}."
             embeddings_to_add.append(SchemaEmbedding(
-                table_name=table_name,
-                description=table_text,
-                embedding=table_embedding
+                table_name=table_name, 
+                description=table_text, 
+                embedding=get_gemini_embedding(table_text)
             ))
 
-            # --- Column-level embeddings ---
-            columns = inspector.get_columns(table_name, schema=schema)
-            for column in columns:
-                col_name = column["name"]
-                col_type = str(column["type"])
-                col_comment = comments.get(table_name, {}).get(col_name, f"Column {col_name} of type {col_type}")
+            # 2. Auto-Embed Foreign Keys (Scales to all 70 tables)
+            try:
+                fks = inspector.get_foreign_keys(table_name, schema=schema)
+                for fk in fks:
+                    # Create a clear rule string for the LLM
+                    fk_text = (f"RELATIONSHIP: {table_name}.{', '.join(fk['constrained_columns'])} "
+                               f"joins to {fk['referred_table']}.{', '.join(fk['referred_columns'])}.")
+                    
+                    embeddings_to_add.append(SchemaEmbedding(
+                        table_name=table_name,
+                        description=fk_text,
+                        embedding=get_gemini_embedding(fk_text)
+                    ))
+            except Exception as e:
+                print(f"   Warning reading FKs for {table_name}: {e}")
 
-                col_text = f"Table: {table_name}. Column: {col_name}. Type: {col_type}. Description: {col_comment}"
-                col_embedding = get_gemini_embedding(col_text)
+            # 3. Embed Custom Rules from JSON
+            if table_name in custom_rules:
+                for rule in custom_rules[table_name]:
+                    rule_text = f"RULE for {table_name}: {rule}"
+                    embeddings_to_add.append(SchemaEmbedding(
+                        table_name=table_name,
+                        description=rule_text,
+                        embedding=get_gemini_embedding(rule_text)
+                    ))
 
+            # 4. Embed Columns (Standard)
+            cols = inspector.get_columns(table_name, schema=schema)
+            for c in cols:
+                col_text = f"Column: {table_name}.{c['name']} ({c['type']})."
                 embeddings_to_add.append(SchemaEmbedding(
-                    table_name=table_name,
-                    column_name=col_name,
-                    description=col_text,
-                    embedding=col_embedding
+                    table_name=table_name, column_name=c['name'],
+                    description=col_text, embedding=get_gemini_embedding(col_text)
                 ))
 
     db.add_all(embeddings_to_add)
     db.commit()
-
-    print(f"\n✅ Successfully ingested and embedded schema for {len(embeddings_to_add)} items.")
+    print(f"✅ Successfully embedded {len(embeddings_to_add)} schema items.")
     db.close()
 
 if __name__ == "__main__":
