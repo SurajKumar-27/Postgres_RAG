@@ -6,12 +6,12 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
-from langchain.output_parsers import CommaSeparatedListOutputParser
+from langchain_core.output_parsers import CommaSeparatedListOutputParser
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_community.utilities.sql_database import SQLDatabase
-from langchain.schema.runnable import RunnablePassthrough
-from langchain.schema.output_parser import StrOutputParser
-from langchain.prompts import PromptTemplate
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import PromptTemplate
 from sqlalchemy.orm import sessionmaker
 from numpy import dot
 from numpy.linalg import norm
@@ -33,10 +33,10 @@ BACKEND_AUTH_TOKEN = os.getenv("BACKEND_AUTH_TOKEN", None)
 
 # ---------- 1) LLMs & Embeddings ----------
 # Core LLM used for SQL generation / decisioning. Keep temp = 0 for deterministic SQL.
-llm = ChatGoogleGenerativeAI(model="models/gemini-2.5-flash", temperature=0, api_key=GOOGLE_API_KEY)
+llm = ChatGoogleGenerativeAI(model="models/gemini-2.5-flash-lite", temperature=0, api_key=GOOGLE_API_KEY)
 
 # Answer generation LLM (you can pick a faster model)
-answer_llm = ChatGoogleGenerativeAI(model="models/gemini-2.5-flash", temperature=0, api_key=GOOGLE_API_KEY)
+answer_llm = ChatGoogleGenerativeAI(model="models/gemini-2.5-flash-lite", temperature=0, api_key=GOOGLE_API_KEY)
 
 # Embedding model (schema retrieval)
 embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001", api_key=GOOGLE_API_KEY)
@@ -256,49 +256,49 @@ If the user's request is purely a data retrieval against the Postgres database, 
 
 # Optional short examples to append to instruction (help LLM generate correct JSON)
 BACKEND_TOOL_EXAMPLES = """
-Example 1 (order details):
-{
- "tool": "call_backend",
- "arguments": {
-   "method": "POST",
-   "url": "https://ifonmbbhyreuewdcvfyt.supabase.co/functions/v1/sls_regular_order_details_guest",
-   "headers": {"Content-Type": "application/json"},
-   "body": {"salesOrderNo": "...."}
- }
-}
+# Example 1 (order details):
+# {
+#  "tool": "call_backend",
+#  "arguments": {
+#    "method": "POST",
+#    "url": "https://ifonmbbhyreuewdcvfyt.supabase.co/functions/v1/sls_regular_order_details_guest",
+#    "headers": {"Content-Type": "application/json"},
+#    "body": {"salesOrderNo": "...."}
+#  }
+# }
 
-Example 2 (get invoice list):
-{
- "tool": "call_backend",
- "arguments": {
-   "method": "POST",
-   "url": "https://ifonmbbhyreuewdcvfyt.supabase.co/functions/v1/sls_invoice_list",
-   "headers": {"Content-Type": "application/json"},
-   "body": {"soldTo":"...", "fromDate":"...", "toDate": "..."}
- }
-}
+# Example 2 (get invoice list):
+# {
+#  "tool": "call_backend",
+#  "arguments": {
+#    "method": "POST",
+#    "url": "https://ifonmbbhyreuewdcvfyt.supabase.co/functions/v1/sls_invoice_list",
+#    "headers": {"Content-Type": "application/json"},
+#    "body": {"soldTo":"...", "fromDate":"...", "toDate": "..."}
+#  }
+# }
 
-Example 3 (invoice details):
-{
- "tool": "call_backend",
- "arguments": {
-   "method": "POST",
-   "url": "https://ifonmbbhyreuewdcvfyt.supabase.co/functions/v1/sls_invoice_details",
-   "headers": {"Content-Type": "application/json"},
-   "body": {"invoiceNo": "...."}
- }
-}
+# Example 3 (invoice details):
+# {
+#  "tool": "call_backend",
+#  "arguments": {
+#    "method": "POST",
+#    "url": "https://ifonmbbhyreuewdcvfyt.supabase.co/functions/v1/sls_invoice_details",
+#    "headers": {"Content-Type": "application/json"},
+#    "body": {"invoiceNo": "...."}
+#  }
+# }
 
-Example 4 (delivery details):
-{
- "tool": "call_backend",
- "arguments": {
-   "method": "POST",
-   "url": "https://ifonmbbhyreuewdcvfyt.supabase.co/functions/v1/sls_delivery_details",
-   "headers": {"Content-Type": "application/json"},
-   "body": {"deliveryNo": "...."}
- }
-}
+# Example 4 (delivery details):
+# {
+#  "tool": "call_backend",
+#  "arguments": {
+#    "method": "POST",
+#    "url": "https://ifonmbbhyreuewdcvfyt.supabase.co/functions/v1/sls_delivery_details",
+#    "headers": {"Content-Type": "application/json"},
+#    "body": {"deliveryNo": "...."}
+#  }
+# }
 """
 
 # ---------- 7) Helpers to parse JSON tool call from model text ----------
@@ -396,7 +396,7 @@ def run_agent_with_backend(query: str, history: List[Any] = []) -> Dict[str, Any
         "or it is purely a data retrieval that should be answered by running SQL against the database. "
         "If you determine a backend call is required, output ONLY a single JSON object matching the BACKEND TOOL format below. "
         "If a backend call is NOT required, output normal text (no JSON tool call)."
-        "\n\n" + BACKEND_TOOL_DOC + "\n\n" + BACKEND_TOOL_EXAMPLES
+        # "\n\n" + BACKEND_TOOL_DOC + "\n\n" + BACKEND_TOOL_EXAMPLES
     )
 
     decision_prompt = f"""
