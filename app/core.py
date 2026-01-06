@@ -33,10 +33,10 @@ BACKEND_AUTH_TOKEN = os.getenv("BACKEND_AUTH_TOKEN", None)
 
 # ---------- 1) LLMs & Embeddings ----------
 # Core LLM used for SQL generation / decisioning. Keep temp = 0 for deterministic SQL.
-llm = ChatGoogleGenerativeAI(model="models/gemini-2.5-flash-lite", temperature=0, api_key=GOOGLE_API_KEY)
+llm = ChatGoogleGenerativeAI(model="models/gemini-2.5-flash", temperature=0, api_key=GOOGLE_API_KEY)
 
 # Answer generation LLM (you can pick a faster model)
-answer_llm = ChatGoogleGenerativeAI(model="models/gemini-2.5-flash-lite", temperature=0, api_key=GOOGLE_API_KEY)
+answer_llm = ChatGoogleGenerativeAI(model="models/gemini-2.5-flash", temperature=0, api_key=GOOGLE_API_KEY)
 
 # Embedding model (schema retrieval)
 embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001", api_key=GOOGLE_API_KEY)
