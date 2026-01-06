@@ -126,29 +126,44 @@ def get_schema_retriever(query: str, k: int = 40) -> str:
         session.close()
 
 
+# app/core.py
+
 suggestion_prompt = PromptTemplate(
     template="""
-You are a helpful data assistant.
+You are a helpful data assistant with access to a PostgreSQL database.
 User Question: {input}
 Current Answer: {answer}
 
-Based on this interaction, suggest 3 short, relevant follow-up questions the user might want to ask next to dig deeper into the data.
+Relevant Database Schema:
+{schema}
+
+Based on the answer and the available schema, suggest 3 short, relevant follow-up questions the user might want to ask next to explore this data further. 
+Ensure the questions can actually be answered using the provided schema.
 Return ONLY the questions, separated by commas. Do not number them.
 
-Example: "Show breakdown by year, Who is the top customer, List the details"
+Example: "Show sales breakdown by region, Who are the top 5 customers, List late deliveries"
 """,
-    input_variables=["input", "answer"]
+    input_variables=["input", "answer", "schema"]
 )
 
-def generate_suggestions(query: str, answer: str) -> List[str]:
-    """Generates 3 follow-up questions based on context."""
+# app/core.py
+
+def generate_suggestions(query: str, answer: str, schema: str) -> List[str]:
+    """Generates 3 follow-up questions based on context and schema."""
     try:
-        # Using the answer_llm (fast model) for this
-        response = answer_llm.invoke(suggestion_prompt.format(input=query, answer=answer)).content
+        # Pass the schema context to the LLM
+        prompt_text = suggestion_prompt.format(
+            input=query, 
+            answer=answer, 
+            schema=schema
+        )
+        response = answer_llm.invoke(prompt_text).content
+        
         # Simple parsing to get a list
         questions = [q.strip() for q in response.split(",") if q.strip()]
-        return questions[:3] # Ensure we only return max 3
-    except Exception:
+        return questions[:3] 
+    except Exception as e:
+        logger.error(f"Error generating suggestions: {e}")
         return []
     
 
@@ -493,7 +508,7 @@ Answer:
     # final_answer = answer_llm.invoke(answer_prompt.format(**answer_input)).content
     final_response = answer_llm.invoke(answer_prompt.format(**answer_input))
     final_answer = final_response.content
-    suggestions = generate_suggestions(query, final_answer)
+    suggestions = generate_suggestions(query, final_answer, schema_text)
 
     if final_response.usage_metadata:
         # Returns dict like: {'input_tokens': 150, 'output_tokens': 45, 'total_tokens': 195}
