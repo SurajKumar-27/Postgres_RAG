@@ -1,34 +1,50 @@
 import os
 import json
 import time
-import google.generativeai as genai
+import logging
+# 1. Update Imports: Use the consolidated LangChain class for consistency
+from langchain_google_vertexai import VertexAIEmbeddings
 from sqlalchemy import create_engine, inspect, text
 from app.database import SessionLocal, SchemaEmbedding, create_tables
 
-# --- Configuration ---
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+# ---------- Configuration ----------
+# 2. Update Environment Variables for Vertex AI
+PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
+LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
 DATABASE_URL = os.getenv("DATABASE_URL")
-TABLE_EXCLUDE_LIST = {"schema_embeddings", "alembic_version"}
-EMBEDDING_MODEL = "models/gemini-embedding-001"
-RULES_FILE = "C:/Users/suraj.marepally\OneDrive - The Hackett Group, Inc/sqlRag/rag/schema_rules.json"  # Path to your rules file
 
-if not GEMINI_API_KEY:
-    raise ValueError("⚠️ GEMINI_API_KEY not set.")
+TABLE_EXCLUDE_LIST = {"schema_embeddings", "alembic_version","chat_sessions","chat_messages"}
+RULES_FILE = "C:/Users/suraj.marepally/OneDrive - The Hackett Group, Inc/sqlRag/rag/schema_rules.json"
 
-genai.configure(api_key=GEMINI_API_KEY)
+if not PROJECT_ID:
+    raise ValueError("⚠️ GOOGLE_CLOUD_PROJECT not set for Vertex AI.")
+
+# # 4. Initialize Embeddings Object (mirrors app/core.py)
+# embeddings_service = GoogleGenerativeAIEmbeddings(
+#     model=EMBEDDING_MODEL,
+#     project=PROJECT_ID,
+#     location=LOCATION,
+#     vertexai=True
+# )
+
+embeddings_service = VertexAIEmbeddings(
+    model_name="text-embedding-004", # Production-ready embedding model
+    project=PROJECT_ID,
+    location=LOCATION
+)
+
 engine = create_engine(DATABASE_URL)
 inspector = inspect(engine)
 db = SessionLocal()
 
 def get_gemini_embedding(text: str):
-    """Generates embedding with retry logic."""
+    """Generates embedding using Vertex AI backend with retry logic."""
     while True:
         try:
-            return genai.embed_content(
-                model=EMBEDDING_MODEL, content=text, task_type="retrieval_document"
-            )["embedding"]
+            # 5. Use the embed_query method from the LangChain class
+            return embeddings_service.embed_query(text)
         except Exception as e:
-            print(f"⚠️ API error: {e}. Retrying in 2s...")
+            print(f"⚠️ Vertex AI API error: {e}. Retrying in 2s...")
             time.sleep(2)
 
 def load_custom_rules():
@@ -39,13 +55,12 @@ def load_custom_rules():
     return {}
 
 def ingest_schema():
-    print("🚀 Starting schema ingestion...")
+    print(f"🚀 Starting schema ingestion via Vertex AI ({LOCATION})...")
     create_tables()
     db.query(SchemaEmbedding).delete() # Clear old data
     
     schema_names = inspector.get_schema_names()
     custom_rules = load_custom_rules()
-    print(custom_rules)
     embeddings_to_add = []
 
     for schema in schema_names:
@@ -65,11 +80,10 @@ def ingest_schema():
                 embedding=get_gemini_embedding(table_text)
             ))
 
-            # 2. Auto-Embed Foreign Keys (Scales to all 70 tables)
+            # 2. Auto-Embed Foreign Keys
             try:
                 fks = inspector.get_foreign_keys(table_name, schema=schema)
                 for fk in fks:
-                    # Create a clear rule string for the LLM
                     fk_text = (f"RELATIONSHIP: {table_name}.{', '.join(fk['constrained_columns'])} "
                                f"joins to {fk['referred_table']}.{', '.join(fk['referred_columns'])}.")
                     
@@ -81,7 +95,7 @@ def ingest_schema():
             except Exception as e:
                 print(f"   Warning reading FKs for {table_name}: {e}")
 
-            # 3. Embed Custom Rules from JSON
+            # 3. Embed Custom Rules
             if table_name in custom_rules:
                 for rule in custom_rules[table_name]:
                     rule_text = f"RULE for {table_name}: {rule}"
@@ -91,7 +105,7 @@ def ingest_schema():
                         embedding=get_gemini_embedding(rule_text)
                     ))
 
-            # 4. Embed Columns (Standard)
+            # 4. Embed Columns
             cols = inspector.get_columns(table_name, schema=schema)
             for c in cols:
                 col_text = f"Column: {table_name}.{c['name']} ({c['type']})."
@@ -102,7 +116,7 @@ def ingest_schema():
 
     db.add_all(embeddings_to_add)
     db.commit()
-    print(f"✅ Successfully embedded {len(embeddings_to_add)} schema items.")
+    print(f"✅ Successfully embedded {len(embeddings_to_add)} schema items using text-embedding-004.")
     db.close()
 
 if __name__ == "__main__":

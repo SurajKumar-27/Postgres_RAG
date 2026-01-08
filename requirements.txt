@@ -5,6 +5,7 @@ pgvector
 psycopg2-binary
 langchain
 langchain-openai
+langchain-google-vertexai
 langchain-community
 openai
 python-dotenv

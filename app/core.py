@@ -1,13 +1,21 @@
 # app/core.py
 import os
-import re
-import json
 import logging
+import json
+import re
+from typing import List
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
+# ... other imports ...
+
+# 1. Change these imports
+from langchain_google_vertexai import ChatVertexAI, VertexAIEmbeddings
+
+
+import requests
 from langchain_core.output_parsers import CommaSeparatedListOutputParser
-from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+# from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_community.utilities.sql_database import SQLDatabase
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
@@ -24,23 +32,34 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ---------- Environment / Config ----------
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-if not GOOGLE_API_KEY:
-    raise ValueError("GOOGLE_API_KEY environment variable not set. Get it from https://aistudio.google.com/app/apikey")
-
+PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
+LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+if not PROJECT_ID:
+    raise ValueError("GOOGLE_CLOUD_PROJECT environment variable not set.")
 # Optional: token to include in backend requests
 BACKEND_AUTH_TOKEN = os.getenv("BACKEND_AUTH_TOKEN", None)
 
 # ---------- 1) LLMs & Embeddings ----------
 # Core LLM used for SQL generation / decisioning. Keep temp = 0 for deterministic SQL.
-llm = ChatGoogleGenerativeAI(model="models/gemini-2.5-flash", temperature=0, api_key=GOOGLE_API_KEY)
-
+llm = ChatVertexAI(
+    model_name="gemini-2.0-flash-001", 
+    temperature=0, 
+    project=PROJECT_ID, 
+    location=LOCATION
+)
 # Answer generation LLM (you can pick a faster model)
-answer_llm = ChatGoogleGenerativeAI(model="models/gemini-2.5-flash", temperature=0, api_key=GOOGLE_API_KEY)
-
+answer_llm = ChatVertexAI(
+    model_name="gemini-2.0-flash-001", 
+    temperature=0, 
+    project=PROJECT_ID, 
+    location=LOCATION
+)
 # Embedding model (schema retrieval)
-embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001", api_key=GOOGLE_API_KEY)
-
+embeddings = VertexAIEmbeddings(
+    model_name="text-embedding-004", # Production-ready embedding model
+    project=PROJECT_ID,
+    location=LOCATION
+)
 # ---------- 2) Database setup ----------
 db = SQLDatabase(db_engine)
 VectorSession = sessionmaker(bind=db_engine)
