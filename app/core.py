@@ -147,20 +147,44 @@ def get_schema_retriever(query: str, k: int = 40) -> str:
 
 # app/core.py
 
+# suggestion_prompt = PromptTemplate(
+#     template="""
+# You are a helpful data assistant with access to a PostgreSQL database.
+# User Question: {input}
+# Current Answer: {answer}
+
+# Relevant Database Schema:
+# {schema}
+
+# Based on the answer and the available schema, suggest 3 short, relevant follow-up questions the user might want to ask next to explore this data further. 
+# Ensure the questions can actually be answered using the provided schema.
+# Return ONLY the questions, separated by commas. Do not number them.
+
+# Example: "Show sales breakdown by region, Who are the top 5 customers, List late deliveries"
+# """,
+#     input_variables=["input", "answer", "schema"]
+# )
+
+# app/core.py
+
 suggestion_prompt = PromptTemplate(
     template="""
-You are a helpful data assistant with access to a PostgreSQL database.
+You are a helpful data assistant.
 User Question: {input}
 Current Answer: {answer}
 
+Based on the answer and available schema, suggest 3 short, relevant follow-up questions.
+
+STRICT RULES:
+1. Use ONLY natural, business-friendly language.
+2. NEVER include technical column names, table names, or SQL snippets in the suggestions.
+3. Ensure the questions are answerable using the provided schema.
+4. Return ONLY the questions, separated by commas. Do not number them.
+
+Example: "What is the total revenue by month?, Who are the top performing agents?, Show recent high-value orders"
+
 Relevant Database Schema:
 {schema}
-
-Based on the answer and the available schema, suggest 3 short, relevant follow-up questions the user might want to ask next to explore this data further. 
-Ensure the questions can actually be answered using the provided schema.
-Return ONLY the questions, separated by commas. Do not number them.
-
-Example: "Show sales breakdown by region, Who are the top 5 customers, List late deliveries"
 """,
     input_variables=["input", "answer", "schema"]
 )
@@ -222,12 +246,32 @@ def contextualize_query(query: str, history: List[Any]) -> str:
         return query
 
 # ---------- 4) SQL generation chain ----------
+# sql_prompt = PromptTemplate(
+#     template="""
+# You are an expert PostgreSQL analyst. Given a user question and a schema description,
+# write a single, syntactically correct SELECT SQL query that answers the question,
+# or return an appropriate read-only query (no UPDATE/DELETE/INSERT/DROP).
+# Only use tables and columns from the provided schema.
+
+# User Question: {input}
+# Relevant Schema:
+# {schema}
+
+# SQL Query:
+# """,
+#     input_variables=["input", "schema"]
+# )
+# app/core.py
+
 sql_prompt = PromptTemplate(
     template="""
 You are an expert PostgreSQL analyst. Given a user question and a schema description,
-write a single, syntactically correct SELECT SQL query that answers the question,
-or return an appropriate read-only query (no UPDATE/DELETE/INSERT/DROP).
-Only use tables and columns from the provided schema.
+write a single, syntactically correct SELECT SQL query that answers the question.
+
+STRICT RULES:
+1. Use only tables and columns from the provided schema.
+2. The query must be READ-ONLY (SELECT only).
+3. ALWAYS include a 'LIMIT 200' clause at the end of your query to prevent large data transfers.
 
 User Question: {input}
 Relevant Schema:
@@ -510,10 +554,32 @@ If returning a tool JSON, ensure it's valid JSON (no trailing text).
         "result": sql_result
     }
     # Fill answer_prompt inline to avoid circular import weirdness
+#     answer_prompt = PromptTemplate(
+#         template="""
+# Given a user question, the SQL query you generated, and the result of that query,
+# formulate a concise, natural language answer.
+
+# User Question: {input}
+# SQL Query: {query}
+# SQL Result: {result}
+
+# Answer:
+# """,
+#         input_variables=["input", "query", "result"]
+#     )
+
+# app/core.py inside run_agent_with_backend()
+
     answer_prompt = PromptTemplate(
         template="""
-Given a user question, the SQL query you generated, and the result of that query,
+Given a user question, the SQL query used, and the raw database results, 
 formulate a concise, natural language answer.
+
+STRICT GUIDELINES:
+1. Do NOT mention internal database column names (e.g., instead of 'cust_id_v2', say 'Customer ID').
+2. Do NOT mention table names or technical metadata.
+3. Use human-friendly business labels for all data points.
+4. If the results were truncated by a limit, answer based on the available data.
 
 User Question: {input}
 SQL Query: {query}
