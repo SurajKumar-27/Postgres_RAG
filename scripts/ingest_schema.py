@@ -54,6 +54,46 @@ def load_custom_rules():
             return json.load(f)
     return {}
 
+def ingest_business_rules_only():
+    print("🚀 Re-ingesting ONLY business rule embeddings...")
+
+    custom_rules = load_custom_rules()
+    if not custom_rules:
+        print("ℹ️ No business rules found. Skipping.")
+        return
+
+    # 1️⃣ Delete existing RULE embeddings
+    deleted = (
+        db.query(SchemaEmbedding)
+        .filter(SchemaEmbedding.description.like("RULE for %"))
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+
+    print(f"🧹 Deleted {deleted} old rule embeddings")
+
+    embeddings_to_add = []
+
+    # 2️⃣ Re-create embeddings for rules only
+    for table_name, rules in custom_rules.items():
+        for rule in rules:
+            rule_text = f"RULE for {table_name}: {rule}"
+
+            embeddings_to_add.append(
+                SchemaEmbedding(
+                    table_name=table_name,
+                    description=rule_text,
+                    embedding=get_gemini_embedding(rule_text)
+                )
+            )
+
+    # 3️⃣ Insert new rule embeddings
+    db.add_all(embeddings_to_add)
+    db.commit()
+
+    print(f"✅ Successfully embedded {len(embeddings_to_add)} business rules only.")
+
+
 def ingest_schema():
     print(f"🚀 Starting schema ingestion via Vertex AI ({LOCATION})...")
     create_tables()
@@ -120,4 +160,9 @@ def ingest_schema():
     db.close()
 
 if __name__ == "__main__":
-    ingest_schema()
+    import sys
+
+    if "--rules-only" in sys.argv:
+        ingest_business_rules_only()
+    else:
+        ingest_schema()
