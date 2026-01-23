@@ -9,6 +9,12 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 # ... other imports ...
 
+from app.intent import classify_intent
+from app.indexes import load_indexes
+from app.query_planner import build_query_plan
+from app.sql_guard import validate_sql
+
+
 # 1. Change these imports
 from langchain_google_vertexai import ChatVertexAI, VertexAIEmbeddings
 
@@ -38,6 +44,7 @@ if not PROJECT_ID:
     raise ValueError("GOOGLE_CLOUD_PROJECT environment variable not set.")
 # Optional: token to include in backend requests
 BACKEND_AUTH_TOKEN = os.getenv("BACKEND_AUTH_TOKEN", None)
+INDEXES = load_indexes()
 
 # ---------- 1) LLMs & Embeddings ----------
 # Core LLM used for SQL generation / decisioning. Keep temp = 0 for deterministic SQL.
@@ -68,79 +75,71 @@ VectorSession = sessionmaker(bind=db_engine)
 
 # ... (keep existing imports)
 
-# ---------- 3) Schema retriever ----------
 def get_schema_retriever(query: str, k: int = 40) -> str:
-    """
-    Retrieves relevant schema DDL AND explicit business rules.
-    It automatically scans retrieved rules to ensure referenced tables (like linked Foreign Keys)
-    are also included in the schema context.
-    """
     session = VectorSession()
     try:
+        # ---------- 1) Intent ----------
+        intents = classify_intent(query)
+
+        allowed_tables = set()
+        from app.retriever import DOMAIN_TABLES
+        for i in intents:
+            allowed_tables.update(DOMAIN_TABLES.get(i, []))
+
+        # ---------- 2) Embedding ----------
         query_embedding = embeddings.embed_query(query)
         schemas = session.query(SchemaEmbedding).all()
 
+        # ---------- 3) Similarity + Filter ----------
         scored = []
         for s in schemas:
+            if allowed_tables and s.table_name not in allowed_tables:
+                continue
+
             emb = np.array(s.embedding)
-            # Cosine similarity
             sim = dot(emb, query_embedding) / (norm(emb) * norm(query_embedding) + 1e-8)
             scored.append((sim, s))
 
-        # Get top K most relevant chunks
         top_k = sorted(scored, key=lambda x: x[0], reverse=True)[:k]
-        
         if not top_k:
-            return ""
+            return "NO RELEVANT SCHEMA FOUND"
 
-        # --- 🆕 DEPENDENCY SCANNING LOGIC ---
-        
-        # 1. Start with the primary tables owning the retrieved chunks
-        relevant_tables = {s.table_name for _, s in top_k}
-        
-        # 2. Get list of ALL real tables in the DB to check against
-        # (Since you have ~70 tables, this check is very fast)
-        all_db_tables = set(db.get_table_names())
-
-        # 3. Scan the retrieved text (Descriptions/Rules) for mentions of other tables
+        # ---------- 4) Table Voting ----------
+        votes = {}
         for _, s in top_k:
-            description_text = s.description.lower()
-            
-            # If a known DB table name appears in the rule text, include that table too!
-            # Example: Rule says "Join to ezc_users", so we detect "ezc_users" and load it.
-            for candidate_table in all_db_tables:
-                if candidate_table in relevant_tables:
-                    continue # Already included
-                
-                # Check if table name exists in the text (simple substring check)
-                if candidate_table in description_text:
-                    relevant_tables.add(candidate_table)
+            votes[s.table_name] = votes.get(s.table_name, 0) + 1
 
-        # 4. Fetch DDL for ALL identified tables (Primary + Referenced)
-        ddl_text = db.get_table_info(table_names=list(relevant_tables))
-        
+        top_tables = sorted(votes, key=votes.get, reverse=True)[:3]
 
-        # --- END NEW LOGIC ---
+        # ---------- 5) Query Plan (Join Rules) ----------
+        plan = build_query_plan(top_tables)
 
-        # 5. Extract Relevant Rules/Descriptions to show to LLM
-        relevant_rules = []
-        seen_rules = set()
-        
+        # ---------- 6) Load DDL ----------
+        ddl_text = db.get_table_info(table_names=top_tables)
+
+        # ---------- 7) Best Columns ----------
+        cols = []
+        seen = set()
         for _, s in top_k:
-            desc = s.description
-            # Avoid duplicating the raw table DDL summary if it's just "Table: x"
-            if desc and desc not in seen_rules:
-                if "RULE" in desc or "RELATIONSHIP" in desc or "Business Rule" in desc:
-                    relevant_rules.append(f"- {desc}")
-                    seen_rules.add(desc)
+            if s.column_name and s.column_name not in seen:
+                cols.append(s.description.strip())
+                seen.add(s.column_name)
+            if len(cols) >= 8:
+                break
 
-        # Combine DDL and Rules
-        final_context = (
-            f"### Relevant Table Schemas (DDL):\n{ddl_text}\n\n"
-            f"### Relevant Relationships & Rules:\n" + "\n".join(relevant_rules)
-        )
-        
-        return final_context
+        return f"""
+### ALLOWED TABLES:
+{", ".join(top_tables)}
+
+### JOIN RULES:
+{chr(10).join(plan['joins'])}
+
+### TABLE SCHEMAS:
+{ddl_text}
+
+### RELEVANT COLUMNS & BUSINESS RULES:
+{chr(10).join("- " + c for c in cols)}
+"""
     finally:
         session.close()
 
@@ -262,25 +261,28 @@ def contextualize_query(query: str, history: List[Any]) -> str:
 #     input_variables=["input", "schema"]
 # )
 # app/core.py
-
 sql_prompt = PromptTemplate(
     template="""
-You are an expert PostgreSQL analyst. Given a user question and a schema description,
-write a single, syntactically correct SELECT SQL query that answers the question.
+You are an ERP SQL engine.
 
-STRICT RULES:
-1. Use only tables and columns from the provided schema.
-2. The query must be READ-ONLY (SELECT only).
-3. ALWAYS include a 'LIMIT 200' clause at the end of your query to prevent large data transfers.
-
-User Question: {input}
-Relevant Schema:
+ALLOWED TABLES & JOIN RULES:
 {schema}
 
-SQL Query:
+Rules:
+- Use ONLY allowed tables
+- Follow JOIN RULES exactly
+- Prefer LEFT JOIN
+- Always include LIMIT 200
+- If the answer cannot be found, return: INSUFFICIENT DATA
+
+User Question:
+{input}
+
+SQL:
 """,
     input_variables=["input", "schema"]
 )
+
 
 sql_generation_chain = (
     RunnablePassthrough.assign(schema=lambda x: get_schema_retriever(x["input"]))
@@ -298,6 +300,13 @@ def run_sql_query_with_retry(query: str, question: str):
     try:
         cleaned = re.sub(r"```[a-zA-Z]*\n?", "", query).strip("` \n")
         logger.info("Executing SQL:\n%s", cleaned)
+        schema_ctx = get_schema_retriever(question)
+        match = re.search(r"ALLOWED TABLES:\n(.+)", schema_ctx)
+        if match:
+            allowed = [t.strip() for t in match.group(1).split(",")]
+            if not validate_sql(cleaned, allowed):
+                raise Exception("SQL blocked: references tables outside allowed scope")
+
         return db.run(cleaned)
     except Exception as e:
         error_msg = str(e)

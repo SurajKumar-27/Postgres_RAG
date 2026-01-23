@@ -12,6 +12,8 @@ from app.database import SessionLocal, SchemaEmbedding, create_tables
 PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
 LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
 DATABASE_URL = os.getenv("DATABASE_URL")
+DOMAIN_HINTS = "procurement shipment asn ibd goods receipt grn invoice user customer vendor"
+
 
 TABLE_EXCLUDE_LIST = {"schema_embeddings", "alembic_version","chat_sessions","chat_messages"}
 RULES_FILE = "C:/Users/suraj.marepally/OneDrive - The Hackett Group, Inc/sqlRag/rag/schema_rules.json"
@@ -77,8 +79,11 @@ def ingest_business_rules_only():
     # 2️⃣ Re-create embeddings for rules only
     for table_name, rules in custom_rules.items():
         for rule in rules:
-            rule_text = f"RULE for {table_name}: {rule}"
-
+            rule_text = f"""
+            TABLE: {table_name}
+            BUSINESS_RULE: {rule}
+            DOMAIN_HINTS: {DOMAIN_HINTS}
+            """
             embeddings_to_add.append(
                 SchemaEmbedding(
                     table_name=table_name,
@@ -113,7 +118,13 @@ def ingest_schema():
             print(f"📘 Processing {table_name}...")
 
             # 1. Embed Table Description
-            table_text = f"Table: {table_name}."
+            table_text = f"""
+            TABLE: {table_name}
+            TYPE: ERP_TABLE
+            DOMAIN_HINTS: {DOMAIN_HINTS}
+            ROLE: Business transactional or master data table
+            """
+
             embeddings_to_add.append(SchemaEmbedding(
                 table_name=table_name, 
                 description=table_text, 
@@ -124,9 +135,13 @@ def ingest_schema():
             try:
                 fks = inspector.get_foreign_keys(table_name, schema=schema)
                 for fk in fks:
-                    fk_text = (f"RELATIONSHIP: {table_name}.{', '.join(fk['constrained_columns'])} "
-                               f"joins to {fk['referred_table']}.{', '.join(fk['referred_columns'])}.")
-                    
+                    fk_text = f"""
+                    TABLE: {table_name}
+                    FOREIGN_KEY: {', '.join(fk['constrained_columns'])}
+                    REFERENCES: {fk['referred_table']}.{', '.join(fk['referred_columns'])}
+                    JOIN_RULE: {table_name}.{', '.join(fk['constrained_columns'])}
+                    = {fk['referred_table']}.{', '.join(fk['referred_columns'])}
+                    """
                     embeddings_to_add.append(SchemaEmbedding(
                         table_name=table_name,
                         description=fk_text,
@@ -138,7 +153,12 @@ def ingest_schema():
             # 3. Embed Custom Rules
             if table_name in custom_rules:
                 for rule in custom_rules[table_name]:
-                    rule_text = f"RULE for {table_name}: {rule}"
+                    rule_text = f"""
+TABLE: {table_name}
+BUSINESS_RULE: {rule}
+DOMAIN_HINT: procurement shipment goods receipt invoice user
+"""
+
                     embeddings_to_add.append(SchemaEmbedding(
                         table_name=table_name,
                         description=rule_text,
@@ -148,10 +168,17 @@ def ingest_schema():
             # 4. Embed Columns
             cols = inspector.get_columns(table_name, schema=schema)
             for c in cols:
-                col_text = f"Column: {table_name}.{c['name']} ({c['type']})."
+                col_text = f"""
+                    TABLE: {table_name}
+                    COLUMN: {c['name']}
+                    TYPE: {c['type']}
+                    ROLE: Field belonging to {table_name}
+                    """
                 embeddings_to_add.append(SchemaEmbedding(
-                    table_name=table_name, column_name=c['name'],
-                    description=col_text, embedding=get_gemini_embedding(col_text)
+                    table_name=table_name,
+                    column_name=c['name'],
+                    description=col_text.strip(),
+                    embedding=get_gemini_embedding(col_text)
                 ))
 
     db.add_all(embeddings_to_add)
