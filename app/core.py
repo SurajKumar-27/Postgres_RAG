@@ -463,6 +463,7 @@ If the backend returned an error or non-success status, explain what likely fail
     input_variables=["input", "backend_result"]
 )
 
+
 # ---------- 10) Agent decision + orchestration ----------
 def run_agent_with_backend(query: str, history: List[Any] = []) -> Dict[str, Any]:
     
@@ -542,7 +543,43 @@ If returning a tool JSON, ensure it's valid JSON (no trailing text).
     generated_sql = sql_generation_chain.invoke({"input": effective_query})
     # Run SQL (with retry/fix)
     try:
-        sql_result = run_sql_query_with_retry(generated_sql, effective_query)
+        # sql_result = run_sql_query_with_retry(generated_sql, effective_query)
+        raw_result = run_sql_query_with_retry(generated_sql, effective_query)
+        def format_sql_result(result, max_rows=20):
+            if not result:
+                return "NO DATA RETURNED"
+
+            formatted = []
+            for row in result[:max_rows]:
+                if isinstance(row, dict):
+                    formatted.append(row)
+                else:
+                    formatted.append({
+                        f"Column {i+1}": value
+                        for i, value in enumerate(row)
+                    })
+
+            return json.dumps({
+                "row_count": len(result),
+                "sample_rows": formatted
+            }, indent=2, default=str)
+        sql_payload = format_sql_result(raw_result)
+
+        if sql_payload["row_count"] == 0:
+            return {
+                "answer": "I couldn’t find any records that match your request. Try adjusting your filters, date range, or search criteria.",
+                "suggested_questions": generate_suggestions(
+                    query,
+                    "No records found",
+                    schema_text
+                ),
+                "generated_sql": generated_sql,
+                "backend_raw": None,
+                "mode": "sql"
+            }
+
+        sql_result = json.dumps(sql_payload, indent=2, default=str)
+
     except Exception as e:
         logger.error("Final SQL execution failed: %s", e, exc_info=True)
         # Let the LLM explain the SQL failure
