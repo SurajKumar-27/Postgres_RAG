@@ -30,3 +30,9 @@ class ExportRequest(BaseModel):
 
 class DocumentQuestionRequest(BaseModel):
     question: str
+
+
+class DocumentAnswerResponse(BaseModel):
+    answer: str
+    document_id: str
+    filename: str

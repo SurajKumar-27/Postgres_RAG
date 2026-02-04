@@ -1,7 +1,5 @@
 import logging
 from io import BytesIO
-from uuid import uuid4
-
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
 from fastapi.responses import StreamingResponse
@@ -15,9 +13,10 @@ from app.models import (
     DocumentUploadResponse,
     ExportRequest,
     DocumentQuestionRequest,
+    DocumentAnswerResponse,
 )
 from app.core import get_chat_response, get_document_answer
-from app.database import SessionLocal
+from app.database import SessionLocal, Document
 # Import our new helpers
 from app.history_manager import get_or_create_session, add_message, get_chat_history
 from app.utils import extract_text_from_pdf, extract_text_from_excel
@@ -35,8 +34,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-DOCUMENT_STORE = {}
 
 # Dependency to get DB session
 def get_db():
@@ -97,7 +94,7 @@ def chat_with_db(request: ChatRequest, db: Session = Depends(get_db)):
 
 
 @app.post("/documents/upload", response_model=DocumentUploadResponse)
-def upload_document(file: UploadFile = File(...)):
+def upload_document(file: UploadFile = File(...), db: Session = Depends(get_db)):
     if not file.filename:
         raise HTTPException(status_code=400, detail="Filename is required.")
 
@@ -114,30 +111,45 @@ def upload_document(file: UploadFile = File(...)):
     else:
         raise HTTPException(status_code=400, detail="Unsupported file type.")
 
-    document_id = str(uuid4())
-    DOCUMENT_STORE[document_id] = {
-        "filename": filename,
-        "file_type": file_type,
-        "content": extracted_text,
-    }
+    if not extracted_text:
+        raise HTTPException(status_code=400, detail="No text extracted from document.")
 
-    return DocumentUploadResponse(
-        document_id=document_id,
+    document = Document(
         filename=filename,
         file_type=file_type,
+        content=extracted_text,
         pages_or_sheets=pages_or_sheets,
         extracted_characters=len(extracted_text),
     )
+    db.add(document)
+    db.commit()
+    db.refresh(document)
+
+    return DocumentUploadResponse(
+        document_id=document.id,
+        filename=document.filename,
+        file_type=document.file_type,
+        pages_or_sheets=document.pages_or_sheets,
+        extracted_characters=document.extracted_characters,
+    )
 
 
-@app.post("/documents/{document_id}/ask")
-def ask_document_question(document_id: str, request: DocumentQuestionRequest):
-    document = DOCUMENT_STORE.get(document_id)
+@app.post("/documents/{document_id}/ask", response_model=DocumentAnswerResponse)
+def ask_document_question(
+    document_id: str,
+    request: DocumentQuestionRequest,
+    db: Session = Depends(get_db),
+):
+    document = db.query(Document).filter(Document.id == document_id).first()
     if not document:
         raise HTTPException(status_code=404, detail="Document not found.")
 
-    answer = get_document_answer(request.question, document["content"])
-    return {"answer": answer, "document_id": document_id}
+    answer = get_document_answer(request.question, document.content)
+    return DocumentAnswerResponse(
+        answer=answer,
+        document_id=document.id,
+        filename=document.filename,
+    )
 
 
 @app.post("/export/pdf")

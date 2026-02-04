@@ -48,6 +48,18 @@ class ChatMessage(Base):
     
     session = relationship("ChatSession", back_populates="messages")
 
+
+class Document(Base):
+    __tablename__ = "documents"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    filename = Column(String, nullable=False)
+    file_type = Column(String, nullable=False)
+    content = Column(Text, nullable=False)
+    pages_or_sheets = Column(Integer, nullable=False)
+    extracted_characters = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 # --- Session Factory ---
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=db_engine)
 
