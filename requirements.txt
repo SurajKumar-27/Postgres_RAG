@@ -10,3 +10,7 @@ langchain-community
 openai
 python-dotenv
 pydantic
+pandas
+pypdf
+reportlab
+openpyxl
