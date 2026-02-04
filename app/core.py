@@ -1,10 +1,13 @@
 # app/core.py
+import ast
 import os
 import logging
 import json
 import re
 from typing import List
 from typing import Any, Dict, List, Optional, Tuple
+from sqlalchemy import text
+
 
 import requests
 # ... other imports ...
@@ -119,12 +122,20 @@ def get_schema_retriever(query: str, k: int = 40) -> str:
 
         # ---------- 7) Best Columns ----------
         cols = []
+        rules = []
         seen = set()
         for _, s in top_k:
+            desc = s.description.strip()
+
+            if "BUSINESS_RULE" in desc:
+                rules.append(desc)
+                continue
+
             if s.column_name and s.column_name not in seen:
-                cols.append(s.description.strip())
+                cols.append(desc)
                 seen.add(s.column_name)
-            if len(cols) >= 8:
+
+            if len(cols) >= 8 and len(rules) >= 5:
                 break
 
         return f"""
@@ -137,9 +148,13 @@ def get_schema_retriever(query: str, k: int = 40) -> str:
 ### TABLE SCHEMAS:
 {ddl_text}
 
-### RELEVANT COLUMNS & BUSINESS RULES:
+### RELEVANT COLUMNS:
 {chr(10).join("- " + c for c in cols)}
+
+### BUSINESS RULES (MUST FOLLOW):
+{chr(10).join("- " + r for r in rules)}
 """
+
     finally:
         session.close()
 
@@ -261,19 +276,45 @@ def contextualize_query(query: str, history: List[Any]) -> str:
 #     input_variables=["input", "schema"]
 # )
 # app/core.py
+# sql_prompt = PromptTemplate(
+#     template="""
+# You are an ERP SQL engine.
+
+# ALLOWED TABLES & JOIN RULES:
+# {schema}
+
+# Rules:
+# - Use ONLY allowed tables
+# - Follow JOIN RULES exactly
+# - Prefer LEFT JOIN
+# - Always include LIMIT 200
+# - If the answer cannot be found, return: INSUFFICIENT DATA
+
+# User Question:
+# {input}
+
+# SQL:
+# """,
+#     input_variables=["input", "schema"]
+# )
 sql_prompt = PromptTemplate(
     template="""
 You are an ERP SQL engine.
 
-ALLOWED TABLES & JOIN RULES:
+KEYWORD MAPPING (PRIMARY TABLES):
+- **"ASN" / "Shipment"** -> Start with `FROM ezc_shipment_header`
+- **"PO" / "Purchase Order"** -> Start with `FROM ezc_po_acknowledgement`
+- **"GRN" / "Goods Receipt"** -> Start with `FROM ezc_erp_mat_doc_items`
+- **"Invoice"** -> Start with `FROM ezc_grn_inv_docs`
+
+ALLOWED TABLES & RULES:
 {schema}
 
-Rules:
-- Use ONLY allowed tables
-- Follow JOIN RULES exactly
-- Prefer LEFT JOIN
-- Always include LIMIT 200
-- If the answer cannot be found, return: INSUFFICIENT DATA
+STRICT GUIDELINES:
+1. **Identify the Primary Entity**: Look at the user's request. If they ask for "ASN", you MUST use `ezc_shipment_header`. Do NOT query `ezc_po_acknowledgement` for ASNs.
+2. **JOIN for Context**: If the user asks for details not in the primary table (e.g., "ASN with Vendor Name" or "PO with Invoice Amount"), you MUST `JOIN` the relevant tables.
+3. **Missing Columns**: Always JOIN `ezc_users` for Creator Names and `ezc_customer` for Vendor Names.
+4. **Limit**: Default to `LIMIT 200` unless the user asks for a specific number.
 
 User Question:
 {input}
@@ -307,7 +348,9 @@ def run_sql_query_with_retry(query: str, question: str):
             if not validate_sql(cleaned, allowed):
                 raise Exception("SQL blocked: references tables outside allowed scope")
 
-        return db.run(cleaned)
+        with db_engine.connect() as conn:
+            result = conn.execute(text(cleaned))
+            return result.mappings().all()
     except Exception as e:
         error_msg = str(e)
         logger.warning("SQL execution failed: %s\nInvoking LLM to fix SQL...", error_msg)
@@ -323,7 +366,10 @@ Return only the corrected SQL query (no explanatory text).
         fixed_sql = llm.invoke(correction_prompt).content
         cleaned_fixed = re.sub(r"```[a-zA-Z]*\n?", "", fixed_sql).strip("` \n")
         logger.info("Running corrected SQL:\n%s", cleaned_fixed)
-        return db.run(cleaned_fixed)
+        with db_engine.connect() as conn:
+            result = conn.execute(text(cleaned_fixed))
+            return result.mappings().all()
+
 
 # ---------- 6) Backend tool description (for instruction to the LLM) ----------
 BACKEND_TOOL_DOC = """
@@ -462,8 +508,6 @@ If the backend returned an error or non-success status, explain what likely fail
 """,
     input_variables=["input", "backend_result"]
 )
-
-
 # ---------- 10) Agent decision + orchestration ----------
 def run_agent_with_backend(query: str, history: List[Any] = []) -> Dict[str, Any]:
     
@@ -540,31 +584,50 @@ If returning a tool JSON, ensure it's valid JSON (no trailing text).
     # --- Fallback path: SQL pipeline ---
     logger.info("LLM did not request backend call; falling back to SQL pipeline.")
     # Generate SQL
+    # ... inside run_agent_with_backend ...
+
+    # Generate SQL
     generated_sql = sql_generation_chain.invoke({"input": effective_query})
-    # Run SQL (with retry/fix)
+
     try:
-        # sql_result = run_sql_query_with_retry(generated_sql, effective_query)
-        raw_result = run_sql_query_with_retry(generated_sql, effective_query)
-        def format_sql_result(result, max_rows=20):
+        result_list = run_sql_query_with_retry(generated_sql, effective_query)
+
+        # try:
+        #     # db.run returns a string like "[(1, 'a'), (2, 'b')]". We convert it to a python list.
+        #     if not raw_result:
+        #         result_list = []
+        #     else:
+        #         result_list = ast.literal_eval(raw_result)
+        # except Exception as e:
+        #     logger.error(f"Failed to parse SQL result string: {e}")
+        #     result_list = []
+        
+        # FIX 1: Remove json.dumps from this helper so it returns a Dict
+        def format_sql_result(result, max_rows=200):
             if not result:
-                return "NO DATA RETURNED"
+                return {"row_count": 0, "sample_rows": []}
 
             formatted = []
             for row in result[:max_rows]:
-                if isinstance(row, dict):
-                    formatted.append(row)
-                else:
+                # 1. Try explicit conversion to dict (works for SQLAlchemy RowMapping)
+                try:
+                    formatted.append(dict(row))
+                except (ValueError, TypeError):
+                    # 2. Fallback for tuple-like results if dict conversion fails
                     formatted.append({
-                        f"Column {i+1}": value
+                        f"col_{i+1}": value
                         for i, value in enumerate(row)
                     })
-
-            return json.dumps({
+            
+            return {
                 "row_count": len(result),
                 "sample_rows": formatted
-            }, indent=2, default=str)
-        sql_payload = format_sql_result(raw_result)
+            }
 
+        # sql_payload is now a Dict
+        sql_payload = format_sql_result(result_list)
+
+        # FIX 2: Now this check works because sql_payload is a dictionary
         if sql_payload["row_count"] == 0:
             return {
                 "answer": "I couldn’t find any records that match your request. Try adjusting your filters, date range, or search criteria.",
@@ -578,9 +641,11 @@ If returning a tool JSON, ensure it's valid JSON (no trailing text).
                 "mode": "sql"
             }
 
+        # FIX 3: Convert to JSON string here, just before sending to LLM
         sql_result = json.dumps(sql_payload, indent=2, default=str)
 
     except Exception as e:
+        # ... (rest of your exception handling)
         logger.error("Final SQL execution failed: %s", e, exc_info=True)
         # Let the LLM explain the SQL failure
         fail_resp = answer_llm.invoke(
@@ -622,10 +687,12 @@ Given a user question, the SQL query used, and the raw database results,
 formulate a concise, natural language answer.
 
 STRICT GUIDELINES:
-1. Do NOT mention internal database column names (e.g., instead of 'cust_id_v2', say 'Customer ID').
-2. Do NOT mention table names or technical metadata.
-3. Use human-friendly business labels for all data points.
-4. If the results were truncated by a limit, answer based on the available data.
+1. Do NOT mention internal database column names or table names.
+2. Use human-friendly business labels.
+3. If the user asks for a specific number of items (e.g., "100 users", "50 orders"), you MUST list ALL of them.
+4. Do NOT summarize with phrases like "and X others" or "including others".
+5. Present long lists clearly, preferably using a markdown list or comma separation.
+
 
 User Question: {input}
 SQL Query: {query}
