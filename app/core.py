@@ -203,6 +203,20 @@ Relevant Database Schema:
     input_variables=["input", "answer", "schema"]
 )
 
+document_answer_prompt = PromptTemplate(
+    template="""
+You are a helpful assistant answering questions from a user-provided document.
+If the answer is not present in the document, say you don't have enough information.
+
+Document:
+{document}
+
+Question:
+{question}
+""",
+    input_variables=["document", "question"],
+)
+
 # app/core.py
 
 def generate_suggestions(query: str, answer: str, schema: str) -> List[str]:
@@ -222,6 +236,12 @@ def generate_suggestions(query: str, answer: str, schema: str) -> List[str]:
     except Exception as e:
         logger.error(f"Error generating suggestions: {e}")
         return []
+
+
+def get_document_answer(question: str, document_text: str) -> str:
+    prompt_text = document_answer_prompt.format(document=document_text, question=question)
+    response = answer_llm.invoke(prompt_text)
+    return response.content.strip()
     
 
 contextualize_prompt = PromptTemplate(

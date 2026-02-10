@@ -1,4 +1,4 @@
-from typing import Optional, Any, List
+from typing import Optional, Any, List, Dict
 from pydantic import BaseModel
 
 class ChatRequest(BaseModel):
@@ -12,3 +12,27 @@ class ChatResponse(BaseModel):
     generated_sql: Optional[str] = None
     backend_raw: Optional[Any] = None
     mode: str
+
+
+class DocumentUploadResponse(BaseModel):
+    document_id: str
+    filename: str
+    file_type: str
+    pages_or_sheets: int
+    extracted_characters: int
+
+
+class ExportRequest(BaseModel):
+    title: str
+    content: str
+    rows: Optional[List[Dict[str, Any]]] = None
+
+
+class DocumentQuestionRequest(BaseModel):
+    question: str
+
+
+class DocumentAnswerResponse(BaseModel):
+    answer: str
+    document_id: str
+    filename: str
