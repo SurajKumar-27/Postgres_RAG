@@ -6,6 +6,44 @@ from typing import Tuple
 import pandas as pd
 from pypdf import PdfReader
 
+import os
+import requests
+import logging
+from requests.auth import HTTPBasicAuth
+
+logger = logging.getLogger(__name__)
+
+def execute_remote_query(sql_query: str) -> list:
+    """Executes T-SQL via the remote MSSQL REST endpoint with authentication."""
+    url = os.getenv("REMOTE_DB_URL")
+    user = os.getenv("REMOTE_DB_USER")
+    password = os.getenv("REMOTE_DB_PASSWORD")
+    
+    if not url:
+        raise ValueError("REMOTE_DB_URL is not set in the environment.")
+
+    payload = {"query": sql_query}
+    
+    try:
+        # Using HTTPBasicAuth based on your requirement for user/password headers
+        response = requests.post(
+            url, 
+            json=payload, 
+            auth=HTTPBasicAuth(user, password),
+            timeout=60
+        )
+        response.raise_for_status()
+        data = response.json()
+        
+        # Standardize response: return the recordset list
+        if isinstance(data, list):
+            return data
+        return data.get("recordset") or data.get("results") or []
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Remote MSSQL query failed: {e}")
+        raise Exception(f"Database API Connectivity Error: {str(e)}")
+
 
 def extract_text_from_pdf(content: bytes) -> Tuple[str, int]:
     reader = PdfReader(BytesIO(content))

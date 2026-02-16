@@ -6,14 +6,13 @@ import logging
 from langchain_google_vertexai import VertexAIEmbeddings
 from sqlalchemy import create_engine, inspect, text
 from app.database import SessionLocal, SchemaEmbedding, create_tables
+from app.utils import execute_remote_query 
 
 # ---------- Configuration ----------
 # 2. Update Environment Variables for Vertex AI
 PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
 LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
 DATABASE_URL = os.getenv("DATABASE_URL")
-DOMAIN_HINTS = "procurement shipment asn ibd goods receipt grn invoice user customer vendor"
-
 
 TABLE_EXCLUDE_LIST = {"schema_embeddings", "alembic_version","chat_sessions","chat_messages"}
 RULES_FILE = "C:/Users/suraj.marepally/OneDrive - The Hackett Group, Inc/sqlRag/rag/schema_rules.json"
@@ -100,90 +99,84 @@ def ingest_business_rules_only():
 
 
 def ingest_schema():
-    print(f"🚀 Starting schema ingestion via Vertex AI ({LOCATION})...")
+    print(f"🚀 Starting remote MSSQL schema ingestion via Vertex AI ({LOCATION})...")
     create_tables()
-    db.query(SchemaEmbedding).delete() # Clear old data
+    db.query(SchemaEmbedding).delete() # Clear local PostgreSQL embeddings
     
-    schema_names = inspector.get_schema_names()
+    # Fetch metadata from remote MSSQL server using authenticated helper
+    tsql_query = """
+    SELECT 
+        t.name AS table_name,
+        c.name AS column_name,
+        ty.name AS data_type
+    FROM sys.tables t
+    JOIN sys.columns c ON t.object_id = c.object_id
+    JOIN sys.types ty ON c.user_type_id = ty.user_type_id
+    WHERE t.is_ms_shipped = 0
+    ORDER BY t.name;
+    """
+    raw_metadata = execute_remote_query(tsql_query)
     custom_rules = load_custom_rules()
     embeddings_to_add = []
 
-    for schema in schema_names:
-        if schema.startswith("pg_") or schema == "information_schema": continue
+    # Group remote metadata by table for processing
+    tables = {}
+    for row in raw_metadata:
+        t_name = row['table_name']
+        if t_name not in tables:
+            tables[t_name] = []
+        tables[t_name].append(row)
+
+    for table_name, columns in tables.items():
+        if table_name in TABLE_EXCLUDE_LIST: 
+            continue
         
-        tables = inspector.get_table_names(schema=schema)
-        for table_name in tables:
-            if table_name in TABLE_EXCLUDE_LIST: continue
-            
-            print(f"📘 Processing {table_name}...")
+        print(f"📘 Processing {table_name}...")
 
-            # 1. Embed Table Description
-            table_text = f"""
-            TABLE: {table_name}
-            TYPE: ERP_TABLE
-            DOMAIN_HINTS: {DOMAIN_HINTS}
-            ROLE: Business transactional or master data table
-            """
+        # 1. Embed Table Description
+        table_text = f"""
+        TABLE: {table_name}
+        TYPE: MSSQL_ERP_TABLE
+        ROLE: Business transactional or master data table
+        """
+        embeddings_to_add.append(SchemaEmbedding(
+            table_name=table_name, 
+            description=table_text, 
+            embedding=get_gemini_embedding(table_text)
+        ))
 
-            embeddings_to_add.append(SchemaEmbedding(
-                table_name=table_name, 
-                description=table_text, 
-                embedding=get_gemini_embedding(table_text)
-            ))
-
-            # 2. Auto-Embed Foreign Keys
-            try:
-                fks = inspector.get_foreign_keys(table_name, schema=schema)
-                for fk in fks:
-                    fk_text = f"""
-                    TABLE: {table_name}
-                    FOREIGN_KEY: {', '.join(fk['constrained_columns'])}
-                    REFERENCES: {fk['referred_table']}.{', '.join(fk['referred_columns'])}
-                    JOIN_RULE: {table_name}.{', '.join(fk['constrained_columns'])}
-                    = {fk['referred_table']}.{', '.join(fk['referred_columns'])}
-                    """
-                    embeddings_to_add.append(SchemaEmbedding(
-                        table_name=table_name,
-                        description=fk_text,
-                        embedding=get_gemini_embedding(fk_text)
-                    ))
-            except Exception as e:
-                print(f"   Warning reading FKs for {table_name}: {e}")
-
-            # 3. Embed Custom Rules
-            if table_name in custom_rules:
-                for rule in custom_rules[table_name]:
-                    rule_text = f"""
+        # 2. Embed Custom Business Rules (Preserved Logic)
+        if table_name in custom_rules:
+            for rule in custom_rules[table_name]:
+                rule_text = f"""
 TABLE: {table_name}
 BUSINESS_RULE: {rule}
-DOMAIN_HINT: procurement shipment goods receipt invoice user
 """
-
-                    embeddings_to_add.append(SchemaEmbedding(
-                        table_name=table_name,
-                        description=rule_text,
-                        embedding=get_gemini_embedding(rule_text)
-                    ))
-
-            # 4. Embed Columns
-            cols = inspector.get_columns(table_name, schema=schema)
-            for c in cols:
-                col_text = f"""
-                    TABLE: {table_name}
-                    COLUMN: {c['name']}
-                    TYPE: {c['type']}
-                    ROLE: Field belonging to {table_name}
-                    """
                 embeddings_to_add.append(SchemaEmbedding(
                     table_name=table_name,
-                    column_name=c['name'],
-                    description=col_text.strip(),
-                    embedding=get_gemini_embedding(col_text)
+                    description=rule_text,
+                    embedding=get_gemini_embedding(rule_text)
                 ))
 
+        # 3. Embed Columns
+        for col in columns:
+            col_text = f"""
+                TABLE: {table_name}
+                COLUMN: {col['column_name']}
+                TYPE: {col['data_type']}
+                ROLE: Field belonging to {table_name}
+                """
+            embeddings_to_add.append(SchemaEmbedding(
+                table_name=table_name,
+                column_name=col['column_name'],
+                description=col_text.strip(),
+                embedding=get_gemini_embedding(col_text)
+            ))
+
+    # Batch insert all embeddings into local PostgreSQL
     db.add_all(embeddings_to_add)
     db.commit()
-    print(f"✅ Successfully embedded {len(embeddings_to_add)} schema items using text-embedding-004.")
+    print(f"✅ Successfully embedded {len(embeddings_to_add)} remote schema items using text-embedding-004.")
     db.close()
 
 if __name__ == "__main__":

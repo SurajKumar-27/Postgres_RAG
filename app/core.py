@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 # ... other imports ...
 
+from Postgres_RAG.app.utils import execute_remote_query
 from app.intent import classify_intent
 from app.indexes import load_indexes
 from app.query_planner import build_query_plan
@@ -283,17 +284,17 @@ def contextualize_query(query: str, history: List[Any]) -> str:
 # app/core.py
 sql_prompt = PromptTemplate(
     template="""
-You are an ERP SQL engine.
+You are an MSSQL (T-SQL) expert engine.
 
 ALLOWED TABLES & JOIN RULES:
 {schema}
 
 Rules:
-- Use ONLY allowed tables
-- Follow JOIN RULES exactly
-- Prefer LEFT JOIN
-- Always include LIMIT 200
-- If the answer cannot be found, return: INSUFFICIENT DATA
+- Use ONLY allowed tables.
+- Follow JOIN RULES exactly.
+- Use T-SQL syntax: Use 'TOP 200' instead of 'LIMIT 200'.
+- For pattern matching, use 'LIKE'.
+- If the answer cannot be found, return: INSUFFICIENT DATA.
 
 User Question:
 {input}
@@ -311,15 +312,12 @@ sql_generation_chain = (
     | StrOutputParser()
 )
 
-# ---------- 5) Execute SQL (with auto-retry fix using LLM) ----------
 def run_sql_query_with_retry(query: str, question: str):
-    """
-    Try to run SQL; if it errors, ask the LLM to fix the query and re-run.
-    Returns query result (whatever db.run returns) or raises on final failure.
-    """
     try:
         cleaned = re.sub(r"```[a-zA-Z]*\n?", "", query).strip("` \n")
-        logger.info("Executing SQL:\n%s", cleaned)
+        logger.info("Executing Remote MSSQL SQL:\n%s", cleaned)
+        
+        # Validation logic remains (uses local schema embeddings)
         schema_ctx = get_schema_retriever(question)
         match = re.search(r"ALLOWED TABLES:\n(.+)", schema_ctx)
         if match:
@@ -327,24 +325,17 @@ def run_sql_query_with_retry(query: str, question: str):
             if not validate_sql(cleaned, allowed):
                 raise Exception("SQL blocked: references tables outside allowed scope")
 
-        return db.run(cleaned)
+        # CALL REMOTE ENDPOINT
+        return execute_remote_query(cleaned) 
+
     except Exception as e:
         error_msg = str(e)
-        logger.warning("SQL execution failed: %s\nInvoking LLM to fix SQL...", error_msg)
-        correction_prompt = f"""
-The following SQL query failed with an error. Fix it and return only the corrected SQL.
-
-User Question: {question}
-SQL Query: {cleaned}
-Error: {error_msg}
-
-Return only the corrected SQL query (no explanatory text).
-"""
+        logger.warning("SQL failed: %s. Retrying with LLM fix...", error_msg)
+        correction_prompt = f"Fix this T-SQL for MSSQL compatibility: {cleaned}. Error: {error_msg}"
         fixed_sql = llm.invoke(correction_prompt).content
         cleaned_fixed = re.sub(r"```[a-zA-Z]*\n?", "", fixed_sql).strip("` \n")
-        logger.info("Running corrected SQL:\n%s", cleaned_fixed)
-        return db.run(cleaned_fixed)
-
+        
+        return execute_remote_query(cleaned_fixed)
 # ---------- 6) Backend tool description (for instruction to the LLM) ----------
 BACKEND_TOOL_DOC = """
 You can call backend REST endpoints by returning a JSON object with the shape:
