@@ -12,30 +12,32 @@ import logging
 from requests.auth import HTTPBasicAuth
 
 logger = logging.getLogger(__name__)
+# app/utils.py
+import os
+import requests
+import logging
+from typing import List, Any
 
-def execute_remote_query(sql_query: str) -> list:
-    """Executes T-SQL via the remote MSSQL REST endpoint with authentication."""
+def execute_remote_query(sql_query: str) -> List[Any]:
+    """Executes T-SQL via the remote MSSQL REST endpoint with custom headers."""
     url = os.getenv("REMOTE_DB_URL")
-    user = os.getenv("REMOTE_DB_USER")
-    password = os.getenv("REMOTE_DB_PASSWORD")
+    # Using the exact header keys from your curl command
+    user_val = os.getenv("REMOTE_DB_USER")
+    pass_val = os.getenv("REMOTE_DB_PASSWORD")
     
-    if not url:
-        raise ValueError("REMOTE_DB_URL is not set in the environment.")
-
+    headers = {
+        "user": user_val,
+        "password": pass_val,
+        "Content-Type": "application/json"
+    }
     payload = {"query": sql_query}
     
     try:
-        # Using HTTPBasicAuth based on your requirement for user/password headers
-        response = requests.post(
-            url, 
-            json=payload, 
-            auth=HTTPBasicAuth(user, password),
-            timeout=60
-        )
+        response = requests.post(url, json=payload, headers=headers, timeout=60)
         response.raise_for_status()
         data = response.json()
         
-        # Standardize response: return the recordset list
+        # Standardize response for the engine
         if isinstance(data, list):
             return data
         return data.get("recordset") or data.get("results") or []

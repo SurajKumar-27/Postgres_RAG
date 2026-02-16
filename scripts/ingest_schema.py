@@ -81,7 +81,6 @@ def ingest_business_rules_only():
             rule_text = f"""
             TABLE: {table_name}
             BUSINESS_RULE: {rule}
-            DOMAIN_HINTS: {DOMAIN_HINTS}
             """
             embeddings_to_add.append(
                 SchemaEmbedding(
@@ -97,13 +96,14 @@ def ingest_business_rules_only():
 
     print(f"✅ Successfully embedded {len(embeddings_to_add)} business rules only.")
 
+# scripts/ingest_schema.py
 
 def ingest_schema():
     print(f"🚀 Starting remote MSSQL schema ingestion via Vertex AI ({LOCATION})...")
     create_tables()
     db.query(SchemaEmbedding).delete() # Clear local PostgreSQL embeddings
     
-    # Fetch metadata from remote MSSQL server using authenticated helper
+    # T-SQL to fetch tables and columns from MSSQL
     tsql_query = """
     SELECT 
         t.name AS table_name,
@@ -115,22 +115,28 @@ def ingest_schema():
     WHERE t.is_ms_shipped = 0
     ORDER BY t.name;
     """
-    raw_metadata = execute_remote_query(tsql_query)
+    
+    try:
+        raw_metadata = execute_remote_query(tsql_query)
+    except Exception as e:
+        print(f"❌ Failed to fetch metadata: {e}")
+        return
+
     custom_rules = load_custom_rules()
     embeddings_to_add = []
 
-    # Group remote metadata by table for processing
-    tables = {}
+    # Grouping metadata by table
+    tables_map = {}
     for row in raw_metadata:
         t_name = row['table_name']
-        if t_name not in tables:
-            tables[t_name] = []
-        tables[t_name].append(row)
+        if t_name not in tables_map:
+            tables_map[t_name] = []
+        tables_map[t_name].append(row)
 
-    for table_name, columns in tables.items():
+    for table_name, columns in tables_map.items():
         if table_name in TABLE_EXCLUDE_LIST: 
             continue
-        
+            
         print(f"📘 Processing {table_name}...")
 
         # 1. Embed Table Description
@@ -145,7 +151,7 @@ def ingest_schema():
             embedding=get_gemini_embedding(table_text)
         ))
 
-        # 2. Embed Custom Business Rules (Preserved Logic)
+        # 2. Embed Custom Business Rules (Modified/Preserved)
         if table_name in custom_rules:
             for rule in custom_rules[table_name]:
                 rule_text = f"""
@@ -173,10 +179,9 @@ BUSINESS_RULE: {rule}
                 embedding=get_gemini_embedding(col_text)
             ))
 
-    # Batch insert all embeddings into local PostgreSQL
     db.add_all(embeddings_to_add)
     db.commit()
-    print(f"✅ Successfully embedded {len(embeddings_to_add)} remote schema items using text-embedding-004.")
+    print(f"✅ Successfully embedded {len(embeddings_to_add)} remote items into local PostgreSQL.")
     db.close()
 
 if __name__ == "__main__":
