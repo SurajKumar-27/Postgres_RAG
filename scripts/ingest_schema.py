@@ -104,17 +104,7 @@ def ingest_schema():
     db.query(SchemaEmbedding).delete() # Clear local PostgreSQL embeddings
     
     # T-SQL to fetch tables and columns from MSSQL
-    tsql_query = """
-    SELECT 
-        t.name AS table_name,
-        c.name AS column_name,
-        ty.name AS data_type
-    FROM sys.tables t
-    JOIN sys.columns c ON t.object_id = c.object_id
-    JOIN sys.types ty ON c.user_type_id = ty.user_type_id
-    WHERE t.is_ms_shipped = 0
-    ORDER BY t.name;
-    """
+    tsql_query = """SELECT t.name AS table_name, c.name AS column_name, ty.name AS data_type FROM sys.tables t JOIN sys.columns c ON t.object_id = c.object_id JOIN sys.types ty ON c.user_type_id = ty.user_type_id WHERE t.is_ms_shipped = 0 ORDER BY t.name"""
     
     try:
         raw_metadata = execute_remote_query(tsql_query)
